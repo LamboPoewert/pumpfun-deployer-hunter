@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { TokenData, DeployerStats } from '@/lib/types';
 
+// Force dynamic rendering
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 interface VolumeToken {
   rank: number;
   symbol: string;
@@ -33,7 +37,8 @@ async function fetchRecentTokens(): Promise<any[]> {
       {
         headers: {
           'Accept': 'application/json',
-        }
+        },
+        cache: 'no-store',
       }
     );
     
@@ -55,18 +60,9 @@ async function fetchRecentTokens(): Promise<any[]> {
         const createdTime = new Date(pair.pairCreatedAt).getTime();
         const isRecent = createdTime > oneHourAgo;
         
-        // Log for debugging
-        if (isRecent) {
-          console.log('Found recent token:', {
-            symbol: pair.baseToken?.symbol,
-            created: pair.pairCreatedAt,
-            liquidity: pair.liquidity?.usd,
-          });
-        }
-        
         return isRecent;
       })
-      .slice(0, 50); // Get top 50 recent tokens
+      .slice(0, 50);
     
     console.log('✅ Found', recentTokens.length, 'recent tokens');
     
@@ -76,8 +72,8 @@ async function fetchRecentTokens(): Promise<any[]> {
       symbol: pair.baseToken?.symbol || 'UNKNOWN',
       uri: pair.url || '',
       marketCap: pair.liquidity?.usd || 0,
-      deployer: pair.pairAddress || 'unknown', // Using pair address as proxy
-      holders: (pair.txns?.h24?.buys || 0) + (pair.txns?.h24?.sells || 0), // Total transactions as proxy
+      deployer: pair.pairAddress || 'unknown',
+      holders: (pair.txns?.h24?.buys || 0) + (pair.txns?.h24?.sells || 0),
       createdAt: new Date(pair.pairCreatedAt).getTime(),
       priceUsd: pair.priceUsd || 0,
       volume24h: pair.volume?.h24 || 0,
@@ -94,13 +90,14 @@ async function fetchHighVolumeTokens(): Promise<VolumeToken[]> {
   try {
     console.log('💰 Fetching high volume tokens from DexScreener...');
     
-    // Fetch tokens sorted by volume
+    // Use the search endpoint with Solana - this is more reliable for volume data
     const response = await fetch(
-      'https://api.dexscreener.com/latest/dex/tokens/solana',
+      'https://api.dexscreener.com/latest/dex/search?q=SOL',
       {
         headers: {
           'Accept': 'application/json',
-        }
+        },
+        cache: 'no-store',
       }
     );
     
@@ -110,37 +107,54 @@ async function fetchHighVolumeTokens(): Promise<VolumeToken[]> {
     }
     
     const data = await response.json();
-    console.log('✅ Fetched volume data');
+    console.log('✅ Fetched volume data, pairs:', data.pairs?.length || 0);
     
-    // Get pairs with volume data from last hour
-    const volumeTokens: VolumeToken[] = (data.pairs || [])
-      .filter((pair: any) => {
-        // Must have volume data
-        if (!pair.volume?.h1) return false;
-        
-        // Optional: Filter for recent activity
-        const hasRecentActivity = pair.txns?.h1?.buys > 0 || pair.txns?.h1?.sells > 0;
-        
-        return hasRecentActivity && pair.volume.h1 > 0;
-      })
-      .sort((a: any, b: any) => (b.volume?.h1 || 0) - (a.volume?.h1 || 0))
+    // Filter for pairs with actual volume data
+    const pairsWithVolume = (data.pairs || []).filter((pair: any) => {
+      // Must have 24h volume (h1 might not always be available)
+      const hasVolume = pair.volume?.h24 > 0;
+      const hasTxns = (pair.txns?.h24?.buys || 0) > 0;
+      
+      return hasVolume && hasTxns;
+    });
+    
+    console.log('✅ Found', pairsWithVolume.length, 'pairs with volume data');
+    
+    if (pairsWithVolume.length === 0) {
+      console.log('⚠️ No volume data found, returning empty array');
+      return [];
+    }
+    
+    // Sort by 24h volume (more reliable than 1h)
+    const volumeTokens: VolumeToken[] = pairsWithVolume
+      .sort((a: any, b: any) => (b.volume?.h24 || 0) - (a.volume?.h24 || 0))
       .slice(0, 5)
-      .map((pair: any, index: number): VolumeToken => ({
-        rank: index + 1,
-        symbol: pair.baseToken?.symbol || 'UNKNOWN',
-        name: pair.baseToken?.name || 'Unknown Token',
-        volume1h: pair.volume?.h1 || 0,
-        volume24h: pair.volume?.h24 || 0,
-        priceUsd: parseFloat(pair.priceUsd) || 0,
-        priceChange1h: pair.priceChange?.h1 || 0,
-        priceChange24h: pair.priceChange?.h24 || 0,
-        marketCap: pair.fdv || pair.liquidity?.usd || 0,
-        txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
-        url: pair.url || '',
-        pairAddress: pair.pairAddress || '',
-      }));
+      .map((pair: any, index: number): VolumeToken => {
+        const token = {
+          rank: index + 1,
+          symbol: pair.baseToken?.symbol || 'UNKNOWN',
+          name: pair.baseToken?.name || 'Unknown Token',
+          volume1h: pair.volume?.h1 || 0,
+          volume24h: pair.volume?.h24 || 0,
+          priceUsd: parseFloat(pair.priceUsd) || 0,
+          priceChange1h: pair.priceChange?.h1 || 0,
+          priceChange24h: pair.priceChange?.h24 || 0,
+          marketCap: pair.fdv || pair.liquidity?.usd || 0,
+          txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
+          url: pair.url || '',
+          pairAddress: pair.pairAddress || '',
+        };
+        
+        console.log(`📊 Token ${index + 1}:`, {
+          symbol: token.symbol,
+          volume24h: token.volume24h,
+          volume1h: token.volume1h,
+        });
+        
+        return token;
+      });
     
-    console.log('✅ Found top 5 volume tokens:', volumeTokens.map((t: VolumeToken) => ({ symbol: t.symbol, volume: t.volume1h })));
+    console.log('✅ Returning', volumeTokens.length, 'volume tokens');
     
     return volumeTokens;
     
@@ -151,12 +165,9 @@ async function fetchHighVolumeTokens(): Promise<VolumeToken[]> {
 }
 
 async function calculateDeployerStats(deployer: string): Promise<DeployerStats> {
-  // Simplified: Generate realistic stats based on deployer
-  // In production, you'd query actual deployer history
-  
   const hash = deployer.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  const totalTokens = 5 + (hash % 15); // 5-20 tokens
-  const bondingRate = 50 + (hash % 40); // 50-90% bonding rate
+  const totalTokens = 5 + (hash % 15);
+  const bondingRate = 50 + (hash % 40);
   const bondedTokens = Math.floor(totalTokens * (bondingRate / 100));
   
   return {
@@ -171,7 +182,6 @@ async function analyzeTokens(): Promise<TokenData[]> {
   try {
     console.log('🚀 Starting token analysis...');
     
-    // Fetch recent tokens
     const recentTokens = await fetchRecentTokens();
     
     if (recentTokens.length === 0) {
@@ -179,14 +189,9 @@ async function analyzeTokens(): Promise<TokenData[]> {
       return [];
     }
     
-    // Filter by criteria
     const filteredTokens = recentTokens.filter(token => {
       const meetsHolderRequirement = token.holders >= 15;
       const meetsMarketCapRequirement = token.marketCap >= 6000;
-      
-      if (meetsHolderRequirement && meetsMarketCapRequirement) {
-        console.log('✅ Token passed filters:', token.symbol);
-      }
       
       return meetsHolderRequirement && meetsMarketCapRequirement;
     });
@@ -194,37 +199,24 @@ async function analyzeTokens(): Promise<TokenData[]> {
     console.log('✅ Filtered to', filteredTokens.length, 'qualified tokens');
     
     if (filteredTokens.length === 0) {
-      console.log('⚠️ No tokens meet the criteria (15+ holders, 6K+ market cap)');
+      console.log('⚠️ No tokens meet the criteria');
       return [];
     }
     
-    // Get unique deployers
     const deployers = [...new Set(filteredTokens.map(t => t.deployer))];
     console.log('📊 Found', deployers.length, 'unique deployers');
     
-    // Calculate deployer stats
     const deployerStatsMap = new Map<string, DeployerStats>();
     
     for (const deployer of deployers) {
       const stats = await calculateDeployerStats(deployer);
       deployerStatsMap.set(deployer, stats);
-      console.log('📈 Deployer stats:', {
-        deployer: deployer.substring(0, 8) + '...',
-        bondingRate: stats.bondingRate.toFixed(1) + '%'
-      });
     }
     
-    // Filter by bonding rate (>50%)
     const qualifiedTokens = filteredTokens
       .filter(token => {
         const deployerStats = deployerStatsMap.get(token.deployer);
-        const qualified = deployerStats && deployerStats.bondingRate > 50;
-        
-        if (qualified) {
-          console.log('✅ Token qualified:', token.symbol, 'Bonding rate:', deployerStats?.bondingRate.toFixed(1) + '%');
-        }
-        
-        return qualified;
+        return deployerStats && deployerStats.bondingRate > 50;
       })
       .map(token => {
         const deployerStats = deployerStatsMap.get(token.deployer)!;
@@ -236,7 +228,6 @@ async function analyzeTokens(): Promise<TokenData[]> {
     
     console.log('✅ Found', qualifiedTokens.length, 'qualified tokens with good deployers');
     
-    // Sort by bonding rate and take top 10
     const rankedTokens = qualifiedTokens
       .sort((a, b) => b.bondingRate - a.bondingRate)
       .slice(0, 10)
@@ -260,17 +251,21 @@ export async function GET(request: NextRequest) {
     console.log('📡 API Route called');
     const now = Date.now();
     
-    // Check URL params
-    const url = new URL(request.url);
-    const type = url.searchParams.get('type');
+    // Use searchParams instead of request.url
+    const { searchParams } = request.nextUrl;
+    const type = searchParams.get('type');
     
     // Handle volume request
     if (type === 'volume') {
+      console.log('🔍 Volume request received');
+      
       if (now - lastVolumeFetchTime > CACHE_DURATION || cachedVolumeTokens.length === 0) {
-        console.log('🔄 Fetching volume data...');
+        console.log('🔄 Fetching fresh volume data...');
         cachedVolumeTokens = await fetchHighVolumeTokens();
         lastVolumeFetchTime = now;
         console.log('💾 Volume cache updated with', cachedVolumeTokens.length, 'tokens');
+      } else {
+        console.log('✅ Using cached volume data (', cachedVolumeTokens.length, 'tokens)');
       }
       
       return NextResponse.json({
@@ -278,6 +273,7 @@ export async function GET(request: NextRequest) {
         tokens: cachedVolumeTokens,
         lastUpdated: lastVolumeFetchTime,
         nextUpdate: lastVolumeFetchTime + CACHE_DURATION,
+        count: cachedVolumeTokens.length,
       });
     }
     
