@@ -314,9 +314,17 @@ export default function Home() {
                         <h4 className="font-orbitron text-xl font-bold text-orange-400 truncate">
                           {token.symbol}
                         </h4>
-                        <span className="font-rajdhani text-sm text-gray-400 truncate">
-                          {token.name}
-                        </span>
+                        {/* Clickable Token Name */}
+                        {token.url && token.name && token.name !== 'Unknown Token' && (
+                          <a 
+                            href={token.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-rajdhani text-sm text-gray-400 hover:text-orange-400 transition-colors truncate underline decoration-dotted underline-offset-2"
+                          >
+                            {token.name}
+                          </a>
+                        )}
                       </div>
                       <div className="flex items-center gap-4 flex-wrap">
                         <div>
