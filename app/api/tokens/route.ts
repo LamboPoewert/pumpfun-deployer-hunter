@@ -92,9 +92,10 @@ async function fetchTrendingTokens(): Promise<TrendingToken[]> {
   try {
     console.log('🔥 Fetching trending tokens from DexScreener...');
     
-    // Fetch Solana pairs sorted by trending
+    // Use DexScreener's token boosts endpoint which shows trending tokens
+    // This is the same data shown on dexscreener.com trending page
     const response = await fetch(
-      'https://api.dexscreener.com/latest/dex/search?q=SOL',
+      'https://api.dexscreener.com/token-boosts/latest/v1',
       {
         headers: {
           'Accept': 'application/json',
@@ -104,97 +105,222 @@ async function fetchTrendingTokens(): Promise<TrendingToken[]> {
     );
     
     if (!response.ok) {
-      console.error('❌ DexScreener trending API error:', response.status);
-      return [];
+      console.log('⚠️ Boosts endpoint failed, trying alternative...');
+      
+      // Fallback: Get top Solana pairs sorted by activity
+      const fallbackResponse = await fetch(
+        'https://api.dexscreener.com/latest/dex/search?q=SOL',
+        {
+          headers: {
+            'Accept': 'application/json',
+          },
+          cache: 'no-store',
+        }
+      );
+      
+      if (!fallbackResponse.ok) {
+        console.error('❌ Both trending endpoints failed');
+        return [];
+      }
+      
+      const fallbackData = await fallbackResponse.json();
+      return processTrendingPairs(fallbackData.pairs || []);
     }
     
     const data = await response.json();
-    console.log('✅ Fetched trending data, pairs:', data.pairs?.length || 0);
+    console.log('✅ Fetched trending boosts data');
     
-    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    // Filter for Solana chain tokens
+    const solanaTrending = (data || [])
+      .filter((item: any) => item.chainId === 'solana')
+      .slice(0, 10);
     
-    // Calculate trending score based on:
-    // - Recent price change
-    // - Transaction volume
-    // - Buy/sell ratio
-    // - Recent activity
-    const pairsWithActivity = (data.pairs || []).filter((pair: any) => {
-      const hasTxns = (pair.txns?.h1?.buys || 0) > 0;
-      const hasVolume = (pair.volume?.h1 || 0) > 0;
-      const hasPriceChange = pair.priceChange?.h1 !== undefined;
-      
-      return hasTxns && hasVolume && hasPriceChange;
-    });
-    
-    console.log('✅ Found', pairsWithActivity.length, 'pairs with activity');
-    
-    if (pairsWithActivity.length === 0) {
-      console.log('⚠️ No trending data found, returning empty array');
-      return [];
+    if (solanaTrending.length === 0) {
+      console.log('⚠️ No Solana trending tokens in boosts, using fallback');
+      const fallbackResponse = await fetch(
+        'https://api.dexscreener.com/latest/dex/search?q=SOL',
+        {
+          headers: {
+            'Accept': 'application/json',
+          },
+          cache: 'no-store',
+        }
+      );
+      const fallbackData = await fallbackResponse.json();
+      return processTrendingPairs(fallbackData.pairs || []);
     }
     
-    // Calculate trending score for each pair
-    const scoredPairs = pairsWithActivity.map((pair: any) => {
-      const priceChange1h = Math.abs(pair.priceChange?.h1 || 0);
-      const volume1h = pair.volume?.h1 || 0;
-      const txns1h = (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0);
-      const buys1h = pair.txns?.h1?.buys || 0;
-      const sells1h = pair.txns?.h1?.sells || 0;
-      
-      // Trending score formula:
-      // High weight on price change + transaction count + volume
-      const trendingScore = 
-        (priceChange1h * 2) +           // Price movement (2x weight)
-        (txns1h / 10) +                 // Transaction count
-        (Math.log(volume1h + 1) * 0.5) + // Volume (logarithmic)
-        (buys1h > sells1h ? 10 : 0);    // Bonus for more buys
-      
-      return {
-        ...pair,
-        trendingScore,
-      };
-    });
+    // Fetch full pair data for each trending token
+    const trendingTokens: TrendingToken[] = [];
     
-    // Sort by trending score and take top 5
-    const trendingTokens: TrendingToken[] = scoredPairs
-      .sort((a: any, b: any) => b.trendingScore - a.trendingScore)
-      .slice(0, 5)
-      .map((pair: any, index: number): TrendingToken => {
-        const token = {
-          rank: index + 1,
-          symbol: pair.baseToken?.symbol || 'UNKNOWN',
-          name: pair.baseToken?.name || 'Unknown Token',
-          volume1h: pair.volume?.h1 || 0,
-          volume24h: pair.volume?.h24 || 0,
-          priceUsd: parseFloat(pair.priceUsd) || 0,
-          priceChange1h: pair.priceChange?.h1 || 0,
-          priceChange24h: pair.priceChange?.h24 || 0,
-          marketCap: pair.fdv || pair.liquidity?.usd || 0,
-          txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
-          buys1h: pair.txns?.h1?.buys || 0,
-          sells1h: pair.txns?.h1?.sells || 0,
-          url: pair.url || '',
-          pairAddress: pair.pairAddress || '',
-        };
+    for (let i = 0; i < Math.min(5, solanaTrending.length); i++) {
+      const trending = solanaTrending[i];
+      
+      try {
+        // Get the full pair data
+        const pairResponse = await fetch(
+          `https://api.dexscreener.com/latest/dex/pairs/solana/${trending.tokenAddress}`,
+          {
+            headers: {
+              'Accept': 'application/json',
+            },
+            cache: 'no-store',
+          }
+        );
         
-        console.log(`🔥 Trending #${index + 1}:`, {
-          symbol: token.symbol,
-          priceChange1h: token.priceChange1h.toFixed(2) + '%',
-          txns1h: token.txns1h,
-          trendingScore: pair.trendingScore.toFixed(2),
-        });
-        
-        return token;
-      });
+        if (pairResponse.ok) {
+          const pairData = await pairResponse.json();
+          const pair = pairData.pairs?.[0];
+          
+          if (pair) {
+            // Get proper token name (avoid generic names like "SOL", "Wrapped SOL", etc.)
+            let tokenName = pair.baseToken?.name || 'Unknown Token';
+            const genericNames = ['SOL', 'Solana', 'Wrapped SOL', 'WSOL', 'wSOL'];
+            
+            // If the name is generic, try to use a better identifier
+            if (genericNames.includes(tokenName) || tokenName === pair.baseToken?.symbol) {
+              // Use the symbol as name if it's different and not generic
+              if (pair.baseToken?.symbol && !genericNames.includes(pair.baseToken.symbol)) {
+                tokenName = pair.baseToken.symbol;
+              } else {
+                tokenName = 'Unknown Token';
+              }
+            }
+            
+            const token: TrendingToken = {
+              rank: i + 1,
+              symbol: pair.baseToken?.symbol || 'UNKNOWN',
+              name: tokenName,
+              volume1h: pair.volume?.h1 || 0,
+              volume24h: pair.volume?.h24 || 0,
+              priceUsd: parseFloat(pair.priceUsd) || 0,
+              priceChange1h: pair.priceChange?.h1 || 0,
+              priceChange24h: pair.priceChange?.h24 || 0,
+              marketCap: pair.fdv || pair.liquidity?.usd || 0,
+              txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
+              buys1h: pair.txns?.h1?.buys || 0,
+              sells1h: pair.txns?.h1?.sells || 0,
+              url: pair.url || '',
+              pairAddress: pair.pairAddress || '',
+            };
+            
+            trendingTokens.push(token);
+            
+            console.log(`🔥 Trending #${i + 1}:`, {
+              symbol: token.symbol,
+              priceChange1h: token.priceChange1h?.toFixed(2) + '%',
+              txns1h: token.txns1h,
+            });
+          }
+        }
+      } catch (error) {
+        console.error(`Error fetching pair data for trending token ${i + 1}:`, error);
+      }
+    }
+    
+    if (trendingTokens.length === 0) {
+      console.log('⚠️ No trending tokens found, using fallback');
+      const fallbackResponse = await fetch(
+        'https://api.dexscreener.com/latest/dex/search?q=SOL',
+        {
+          headers: {
+            'Accept': 'application/json',
+          },
+          cache: 'no-store',
+        }
+      );
+      const fallbackData = await fallbackResponse.json();
+      return processTrendingPairs(fallbackData.pairs || []);
+    }
     
     console.log('✅ Returning', trendingTokens.length, 'trending tokens');
-    
     return trendingTokens;
     
   } catch (error) {
     console.error('❌ Error fetching trending tokens:', error);
-    return [];
+    
+    // Final fallback
+    try {
+      const fallbackResponse = await fetch(
+        'https://api.dexscreener.com/latest/dex/search?q=SOL',
+        {
+          headers: {
+            'Accept': 'application/json',
+          },
+          cache: 'no-store',
+        }
+      );
+      const fallbackData = await fallbackResponse.json();
+      return processTrendingPairs(fallbackData.pairs || []);
+    } catch {
+      return [];
+    }
   }
+}
+
+// Fallback function to process pairs when trending endpoint fails
+function processTrendingPairs(pairs: any[]): TrendingToken[] {
+  // Filter for pairs with recent activity
+  const activePairs = pairs.filter((pair: any) => {
+    const hasTxns = (pair.txns?.h1?.buys || 0) > 0;
+    const hasVolume = (pair.volume?.h1 || 0) > 0;
+    const hasPriceChange = pair.priceChange?.h1 !== undefined;
+    
+    return hasTxns && hasVolume && hasPriceChange;
+  });
+  
+  // Sort by a trending score (similar to DexScreener's algorithm)
+  const scoredPairs = activePairs.map((pair: any) => {
+    const priceChange1h = Math.abs(pair.priceChange?.h1 || 0);
+    const volume1h = pair.volume?.h1 || 0;
+    const txns1h = (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0);
+    const buys1h = pair.txns?.h1?.buys || 0;
+    const sells1h = pair.txns?.h1?.sells || 0;
+    
+    // Trending score (emphasizes recent activity + price movement)
+    const trendingScore = 
+      (priceChange1h * 3) +              // Price movement (3x weight)
+      (txns1h / 5) +                     // Transaction count
+      (Math.log(volume1h + 1) * 1.5) +   // Volume (logarithmic, higher weight)
+      (buys1h > sells1h ? 15 : 0);       // Bonus for buying pressure
+    
+    return { ...pair, trendingScore };
+  });
+  
+  // Return top 5
+  return scoredPairs
+    .sort((a: any, b: any) => b.trendingScore - a.trendingScore)
+    .slice(0, 5)
+    .map((pair: any, index: number): TrendingToken => {
+      // Get proper token name (avoid generic names)
+      let tokenName = pair.baseToken?.name || 'Unknown Token';
+      const genericNames = ['SOL', 'Solana', 'Wrapped SOL', 'WSOL', 'wSOL'];
+      
+      if (genericNames.includes(tokenName) || tokenName === pair.baseToken?.symbol) {
+        if (pair.baseToken?.symbol && !genericNames.includes(pair.baseToken.symbol)) {
+          tokenName = pair.baseToken.symbol;
+        } else {
+          tokenName = 'Unknown Token';
+        }
+      }
+      
+      return {
+        rank: index + 1,
+        symbol: pair.baseToken?.symbol || 'UNKNOWN',
+        name: tokenName,
+        volume1h: pair.volume?.h1 || 0,
+        volume24h: pair.volume?.h24 || 0,
+        priceUsd: parseFloat(pair.priceUsd) || 0,
+        priceChange1h: pair.priceChange?.h1 || 0,
+        priceChange24h: pair.priceChange?.h24 || 0,
+        marketCap: pair.fdv || pair.liquidity?.usd || 0,
+        txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
+        buys1h: pair.txns?.h1?.buys || 0,
+        sells1h: pair.txns?.h1?.sells || 0,
+        url: pair.url || '',
+        pairAddress: pair.pairAddress || '',
+      };
+    });
 }
 
 async function calculateDeployerStats(deployer: string): Promise<DeployerStats> {
