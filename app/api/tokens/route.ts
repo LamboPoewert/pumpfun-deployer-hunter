@@ -20,6 +20,7 @@ interface TrendingToken {
   sells1h: number;
   url: string;
   pairAddress: string;
+  chainId: string;
 }
 
 // Cache for storing token data and deployer stats
@@ -90,12 +91,11 @@ async function fetchRecentTokens(): Promise<any[]> {
 
 async function fetchTrendingTokens(): Promise<TrendingToken[]> {
   try {
-    console.log('🔥 Fetching trending tokens from DexScreener...');
+    console.log('🔥 Fetching trending PumpFun tokens (trendingScoreH1) from DexScreener...');
     
-    // Use DexScreener's token boosts endpoint which shows trending tokens
-    // This is the same data shown on dexscreener.com trending page
+    // Fetch all pairs
     const response = await fetch(
-      'https://api.dexscreener.com/token-boosts/latest/v1',
+      'https://api.dexscreener.com/latest/dex/search?q=',
       {
         headers: {
           'Accept': 'application/json',
@@ -105,222 +105,120 @@ async function fetchTrendingTokens(): Promise<TrendingToken[]> {
     );
     
     if (!response.ok) {
-      console.log('⚠️ Boosts endpoint failed, trying alternative...');
-      
-      // Fallback: Get top Solana pairs sorted by activity
-      const fallbackResponse = await fetch(
-        'https://api.dexscreener.com/latest/dex/search?q=SOL',
-        {
-          headers: {
-            'Accept': 'application/json',
-          },
-          cache: 'no-store',
-        }
-      );
-      
-      if (!fallbackResponse.ok) {
-        console.error('❌ Both trending endpoints failed');
-        return [];
-      }
-      
-      const fallbackData = await fallbackResponse.json();
-      return processTrendingPairs(fallbackData.pairs || []);
+      console.error('❌ DexScreener API error:', response.status);
+      return [];
     }
     
     const data = await response.json();
-    console.log('✅ Fetched trending boosts data');
+    console.log('✅ Fetched pairs data');
     
-    // Filter for Solana chain tokens
-    const solanaTrending = (data || [])
-      .filter((item: any) => item.chainId === 'solana')
-      .slice(0, 10);
-    
-    if (solanaTrending.length === 0) {
-      console.log('⚠️ No Solana trending tokens in boosts, using fallback');
-      const fallbackResponse = await fetch(
-        'https://api.dexscreener.com/latest/dex/search?q=SOL',
-        {
-          headers: {
-            'Accept': 'application/json',
-          },
-          cache: 'no-store',
-        }
-      );
-      const fallbackData = await fallbackResponse.json();
-      return processTrendingPairs(fallbackData.pairs || []);
-    }
-    
-    // Fetch full pair data for each trending token
-    const trendingTokens: TrendingToken[] = [];
-    
-    for (let i = 0; i < Math.min(5, solanaTrending.length); i++) {
-      const trending = solanaTrending[i];
-      
-      try {
-        // Get the full pair data
-        const pairResponse = await fetch(
-          `https://api.dexscreener.com/latest/dex/pairs/solana/${trending.tokenAddress}`,
-          {
-            headers: {
-              'Accept': 'application/json',
-            },
-            cache: 'no-store',
-          }
-        );
+    // Filter for Solana chain, PumpFun DEX, and pairs that have trendingScoreH1
+    const pumpfunPairs = (data.pairs || [])
+      .filter((pair: any) => {
+        const isSolana = pair.chainId === 'solana';
+        const isPumpFun = pair.dexId === 'raydium' && pair.url?.includes('pump.fun');
+        const hasTrendingScore = pair.trendingScoreH1 !== undefined && pair.trendingScoreH1 !== null;
+        const hasActivity = (pair.txns?.h1?.buys || 0) > 0;
         
-        if (pairResponse.ok) {
-          const pairData = await pairResponse.json();
-          const pair = pairData.pairs?.[0];
+        // Additional check: look for PumpFun in labels or URL
+        const hasPumpFunLabel = pair.labels?.includes('pump.fun') || 
+                                pair.labels?.includes('pumpfun') ||
+                                pair.url?.includes('pump.fun');
+        
+        return isSolana && hasPumpFunLabel && hasTrendingScore && hasActivity;
+      });
+    
+    console.log('✅ Found', pumpfunPairs.length, 'PumpFun pairs with trending scores');
+    
+    if (pumpfunPairs.length === 0) {
+      console.log('⚠️ No trending PumpFun pairs found, trying broader search...');
+      
+      // Fallback: Look for tokens with pump.fun in URL
+      const fallbackPairs = (data.pairs || [])
+        .filter((pair: any) => {
+          const isSolana = pair.chainId === 'solana';
+          const hasPumpFunUrl = pair.url?.includes('pump.fun');
+          const hasTrendingScore = pair.trendingScoreH1 !== undefined && pair.trendingScoreH1 !== null;
+          const hasActivity = (pair.txns?.h1?.buys || 0) > 0;
           
-          if (pair) {
-            // Get proper token name (avoid generic names like "SOL", "Wrapped SOL", etc.)
-            let tokenName = pair.baseToken?.name || 'Unknown Token';
-            const genericNames = ['SOL', 'Solana', 'Wrapped SOL', 'WSOL', 'wSOL'];
-            
-            // If the name is generic, try to use a better identifier
-            if (genericNames.includes(tokenName) || tokenName === pair.baseToken?.symbol) {
-              // Use the symbol as name if it's different and not generic
-              if (pair.baseToken?.symbol && !genericNames.includes(pair.baseToken.symbol)) {
-                tokenName = pair.baseToken.symbol;
-              } else {
-                tokenName = 'Unknown Token';
-              }
-            }
-            
-            const token: TrendingToken = {
-              rank: i + 1,
-              symbol: pair.baseToken?.symbol || 'UNKNOWN',
-              name: tokenName,
-              volume1h: pair.volume?.h1 || 0,
-              volume24h: pair.volume?.h24 || 0,
-              priceUsd: parseFloat(pair.priceUsd) || 0,
-              priceChange1h: pair.priceChange?.h1 || 0,
-              priceChange24h: pair.priceChange?.h24 || 0,
-              marketCap: pair.fdv || pair.liquidity?.usd || 0,
-              txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
-              buys1h: pair.txns?.h1?.buys || 0,
-              sells1h: pair.txns?.h1?.sells || 0,
-              url: pair.url || '',
-              pairAddress: pair.pairAddress || '',
-            };
-            
-            trendingTokens.push(token);
-            
-            console.log(`🔥 Trending #${i + 1}:`, {
-              symbol: token.symbol,
-              priceChange1h: token.priceChange1h?.toFixed(2) + '%',
-              txns1h: token.txns1h,
-            });
-          }
-        }
-      } catch (error) {
-        console.error(`Error fetching pair data for trending token ${i + 1}:`, error);
+          return isSolana && hasPumpFunUrl && hasTrendingScore && hasActivity;
+        });
+      
+      console.log('✅ Fallback found', fallbackPairs.length, 'pairs with pump.fun URL');
+      
+      if (fallbackPairs.length === 0) {
+        console.log('⚠️ No PumpFun tokens found even with fallback');
+        return [];
       }
+      
+      return processTrendingPairs(fallbackPairs);
     }
     
-    if (trendingTokens.length === 0) {
-      console.log('⚠️ No trending tokens found, using fallback');
-      const fallbackResponse = await fetch(
-        'https://api.dexscreener.com/latest/dex/search?q=SOL',
-        {
-          headers: {
-            'Accept': 'application/json',
-          },
-          cache: 'no-store',
-        }
-      );
-      const fallbackData = await fallbackResponse.json();
-      return processTrendingPairs(fallbackData.pairs || []);
-    }
-    
-    console.log('✅ Returning', trendingTokens.length, 'trending tokens');
-    return trendingTokens;
+    return processTrendingPairs(pumpfunPairs);
     
   } catch (error) {
     console.error('❌ Error fetching trending tokens:', error);
-    
-    // Final fallback
-    try {
-      const fallbackResponse = await fetch(
-        'https://api.dexscreener.com/latest/dex/search?q=SOL',
-        {
-          headers: {
-            'Accept': 'application/json',
-          },
-          cache: 'no-store',
-        }
-      );
-      const fallbackData = await fallbackResponse.json();
-      return processTrendingPairs(fallbackData.pairs || []);
-    } catch {
-      return [];
-    }
+    return [];
   }
 }
 
-// Fallback function to process pairs when trending endpoint fails
 function processTrendingPairs(pairs: any[]): TrendingToken[] {
-  // Filter for pairs with recent activity
-  const activePairs = pairs.filter((pair: any) => {
-    const hasTxns = (pair.txns?.h1?.buys || 0) > 0;
-    const hasVolume = (pair.volume?.h1 || 0) > 0;
-    const hasPriceChange = pair.priceChange?.h1 !== undefined;
-    
-    return hasTxns && hasVolume && hasPriceChange;
+  // Sort by trendingScoreH1 descending (highest first) - exactly like DexScreener website
+  const sortedPairs = pairs.sort((a: any, b: any) => {
+    const scoreA = a.trendingScoreH1 || 0;
+    const scoreB = b.trendingScoreH1 || 0;
+    return scoreB - scoreA;
   });
   
-  // Sort by a trending score (similar to DexScreener's algorithm)
-  const scoredPairs = activePairs.map((pair: any) => {
-    const priceChange1h = Math.abs(pair.priceChange?.h1 || 0);
-    const volume1h = pair.volume?.h1 || 0;
-    const txns1h = (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0);
-    const buys1h = pair.txns?.h1?.buys || 0;
-    const sells1h = pair.txns?.h1?.sells || 0;
-    
-    // Trending score (emphasizes recent activity + price movement)
-    const trendingScore = 
-      (priceChange1h * 3) +              // Price movement (3x weight)
-      (txns1h / 5) +                     // Transaction count
-      (Math.log(volume1h + 1) * 1.5) +   // Volume (logarithmic, higher weight)
-      (buys1h > sells1h ? 15 : 0);       // Bonus for buying pressure
-    
-    return { ...pair, trendingScore };
-  });
+  // Take top 5
+  const top5Trending = sortedPairs.slice(0, 5);
   
-  // Return top 5
-  return scoredPairs
-    .sort((a: any, b: any) => b.trendingScore - a.trendingScore)
-    .slice(0, 5)
-    .map((pair: any, index: number): TrendingToken => {
-      // Get proper token name (avoid generic names)
-      let tokenName = pair.baseToken?.name || 'Unknown Token';
-      const genericNames = ['SOL', 'Solana', 'Wrapped SOL', 'WSOL', 'wSOL'];
-      
-      if (genericNames.includes(tokenName) || tokenName === pair.baseToken?.symbol) {
-        if (pair.baseToken?.symbol && !genericNames.includes(pair.baseToken.symbol)) {
-          tokenName = pair.baseToken.symbol;
-        } else {
-          tokenName = 'Unknown Token';
-        }
+  // Map to our TrendingToken format
+  const trendingTokens: TrendingToken[] = top5Trending.map((pair: any, index: number): TrendingToken => {
+    // Get proper token name (avoid generic names)
+    let tokenName = pair.baseToken?.name || 'Unknown Token';
+    const genericNames = ['SOL', 'Solana', 'Wrapped SOL', 'WSOL', 'wSOL'];
+    
+    if (genericNames.includes(tokenName) || tokenName === pair.baseToken?.symbol) {
+      if (pair.baseToken?.symbol && !genericNames.includes(pair.baseToken.symbol)) {
+        tokenName = pair.baseToken.symbol;
+      } else {
+        tokenName = 'Unknown Token';
       }
-      
-      return {
-        rank: index + 1,
-        symbol: pair.baseToken?.symbol || 'UNKNOWN',
-        name: tokenName,
-        volume1h: pair.volume?.h1 || 0,
-        volume24h: pair.volume?.h24 || 0,
-        priceUsd: parseFloat(pair.priceUsd) || 0,
-        priceChange1h: pair.priceChange?.h1 || 0,
-        priceChange24h: pair.priceChange?.h24 || 0,
-        marketCap: pair.fdv || pair.liquidity?.usd || 0,
-        txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
-        buys1h: pair.txns?.h1?.buys || 0,
-        sells1h: pair.txns?.h1?.sells || 0,
-        url: pair.url || '',
-        pairAddress: pair.pairAddress || '',
-      };
+    }
+    
+    const token: TrendingToken = {
+      rank: index + 1,
+      symbol: pair.baseToken?.symbol || 'UNKNOWN',
+      name: tokenName,
+      volume1h: pair.volume?.h1 || 0,
+      volume24h: pair.volume?.h24 || 0,
+      priceUsd: parseFloat(pair.priceUsd) || 0,
+      priceChange1h: pair.priceChange?.h1 || 0,
+      priceChange24h: pair.priceChange?.h24 || 0,
+      marketCap: pair.fdv || pair.liquidity?.usd || 0,
+      txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
+      buys1h: pair.txns?.h1?.buys || 0,
+      sells1h: pair.txns?.h1?.sells || 0,
+      url: pair.url || '',
+      pairAddress: pair.pairAddress || '',
+      chainId: pair.chainId || 'solana',
+    };
+    
+    console.log(`🔥 PumpFun Trending #${index + 1}:`, {
+      symbol: token.symbol,
+      name: tokenName,
+      trendingScore: pair.trendingScoreH1?.toFixed(2),
+      priceChange1h: token.priceChange1h?.toFixed(2) + '%',
+      txns1h: token.txns1h,
+      url: pair.url,
     });
+    
+    return token;
+  });
+  
+  console.log('✅ Returning top 5 trending PumpFun tokens (by trendingScoreH1)');
+  return trendingTokens;
 }
 
 async function calculateDeployerStats(deployer: string): Promise<DeployerStats> {
@@ -419,7 +317,7 @@ export async function GET(request: NextRequest) {
       console.log('🔥 Trending request received');
       
       if (now - lastTrendingFetchTime > CACHE_DURATION || cachedTrendingTokens.length === 0) {
-        console.log('🔄 Fetching fresh trending data...');
+        console.log('🔄 Fetching fresh PumpFun trending data (trendingScoreH1)...');
         cachedTrendingTokens = await fetchTrendingTokens();
         lastTrendingFetchTime = now;
         console.log('💾 Trending cache updated with', cachedTrendingTokens.length, 'tokens');
