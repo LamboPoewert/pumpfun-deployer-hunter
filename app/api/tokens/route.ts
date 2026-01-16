@@ -91,11 +91,11 @@ async function fetchRecentTokens(): Promise<any[]> {
 
 async function fetchTrendingTokens(): Promise<TrendingToken[]> {
   try {
-    console.log('🔥 Fetching trending PumpFun tokens (trendingScoreH1) from DexScreener...');
+    console.log('🔥 Fetching trending tokens from DexScreener...');
     
-    // Fetch all pairs
+    // Fetch all Solana pairs
     const response = await fetch(
-      'https://api.dexscreener.com/latest/dex/search?q=',
+      'https://api.dexscreener.com/latest/dex/search?q=SOL',
       {
         headers: {
           'Accept': 'application/json',
@@ -110,51 +110,63 @@ async function fetchTrendingTokens(): Promise<TrendingToken[]> {
     }
     
     const data = await response.json();
-    console.log('✅ Fetched pairs data');
+    console.log('✅ Fetched', data.pairs?.length || 0, 'total pairs');
     
-    // Filter for Solana chain, PumpFun DEX, and pairs that have trendingScoreH1
-    const pumpfunPairs = (data.pairs || [])
-      .filter((pair: any) => {
-        const isSolana = pair.chainId === 'solana';
-        const isPumpFun = pair.dexId === 'raydium' && pair.url?.includes('pump.fun');
-        const hasTrendingScore = pair.trendingScoreH1 !== undefined && pair.trendingScoreH1 !== null;
-        const hasActivity = (pair.txns?.h1?.buys || 0) > 0;
-        
-        // Additional check: look for PumpFun in labels or URL
-        const hasPumpFunLabel = pair.labels?.includes('pump.fun') || 
-                                pair.labels?.includes('pumpfun') ||
-                                pair.url?.includes('pump.fun');
-        
-        return isSolana && hasPumpFunLabel && hasTrendingScore && hasActivity;
-      });
+    // First, let's see what we have
+    const solanaPairs = (data.pairs || []).filter((pair: any) => pair.chainId === 'solana');
+    console.log('✅ Found', solanaPairs.length, 'Solana pairs');
     
-    console.log('✅ Found', pumpfunPairs.length, 'PumpFun pairs with trending scores');
+    // Check how many have trendingScoreH1
+    const pairsWithTrending = solanaPairs.filter((pair: any) => 
+      pair.trendingScoreH1 !== undefined && pair.trendingScoreH1 !== null && pair.trendingScoreH1 > 0
+    );
+    console.log('✅ Found', pairsWithTrending.length, 'pairs with trendingScoreH1');
     
-    if (pumpfunPairs.length === 0) {
-      console.log('⚠️ No trending PumpFun pairs found, trying broader search...');
+    // Check how many have activity
+    const pairsWithActivity = pairsWithTrending.filter((pair: any) => 
+      (pair.txns?.h1?.buys || 0) > 0 || (pair.volume?.h1 || 0) > 0
+    );
+    console.log('✅ Found', pairsWithActivity.length, 'pairs with h1 activity');
+    
+    // Now filter for PumpFun - be more lenient
+    const pumpfunPairs = pairsWithActivity.filter((pair: any) => {
+      // Check multiple indicators for PumpFun
+      const urlCheck = pair.url?.toLowerCase().includes('pump');
+      const dexIdCheck = pair.dexId?.toLowerCase().includes('pump');
+      const labelCheck = pair.labels?.some((label: string) => 
+        label.toLowerCase().includes('pump')
+      );
       
-      // Fallback: Look for tokens with pump.fun in URL
-      const fallbackPairs = (data.pairs || [])
-        .filter((pair: any) => {
-          const isSolana = pair.chainId === 'solana';
-          const hasPumpFunUrl = pair.url?.includes('pump.fun');
-          const hasTrendingScore = pair.trendingScoreH1 !== undefined && pair.trendingScoreH1 !== null;
-          const hasActivity = (pair.txns?.h1?.buys || 0) > 0;
-          
-          return isSolana && hasPumpFunUrl && hasTrendingScore && hasActivity;
+      const isPumpFun = urlCheck || dexIdCheck || labelCheck;
+      
+      if (isPumpFun) {
+        console.log('Found PumpFun token:', {
+          symbol: pair.baseToken?.symbol,
+          url: pair.url,
+          dexId: pair.dexId,
+          labels: pair.labels,
+          trendingScore: pair.trendingScoreH1
         });
-      
-      console.log('✅ Fallback found', fallbackPairs.length, 'pairs with pump.fun URL');
-      
-      if (fallbackPairs.length === 0) {
-        console.log('⚠️ No PumpFun tokens found even with fallback');
-        return [];
       }
       
-      return processTrendingPairs(fallbackPairs);
+      return isPumpFun;
+    });
+    
+    console.log('✅ Found', pumpfunPairs.length, 'PumpFun pairs');
+    
+    // If no PumpFun pairs found, just use top trending Solana pairs
+    const finalPairs = pumpfunPairs.length > 0 ? pumpfunPairs : pairsWithActivity;
+    
+    if (pumpfunPairs.length === 0) {
+      console.log('⚠️ No specific PumpFun pairs found, using all Solana trending pairs');
     }
     
-    return processTrendingPairs(pumpfunPairs);
+    if (finalPairs.length === 0) {
+      console.log('❌ No pairs found at all');
+      return [];
+    }
+    
+    return processTrendingPairs(finalPairs);
     
   } catch (error) {
     console.error('❌ Error fetching trending tokens:', error);
@@ -163,12 +175,19 @@ async function fetchTrendingTokens(): Promise<TrendingToken[]> {
 }
 
 function processTrendingPairs(pairs: any[]): TrendingToken[] {
-  // Sort by trendingScoreH1 descending (highest first) - exactly like DexScreener website
+  console.log('📊 Processing', pairs.length, 'pairs for trending');
+  
+  // Sort by trendingScoreH1 descending (highest first)
   const sortedPairs = pairs.sort((a: any, b: any) => {
     const scoreA = a.trendingScoreH1 || 0;
     const scoreB = b.trendingScoreH1 || 0;
     return scoreB - scoreA;
   });
+  
+  console.log('Top trending scores:', sortedPairs.slice(0, 5).map((p: any) => ({
+    symbol: p.baseToken?.symbol,
+    score: p.trendingScoreH1
+  })));
   
   // Take top 5
   const top5Trending = sortedPairs.slice(0, 5);
@@ -205,19 +224,18 @@ function processTrendingPairs(pairs: any[]): TrendingToken[] {
       chainId: pair.chainId || 'solana',
     };
     
-    console.log(`🔥 PumpFun Trending #${index + 1}:`, {
+    console.log(`🔥 Trending #${index + 1}:`, {
       symbol: token.symbol,
       name: tokenName,
       trendingScore: pair.trendingScoreH1?.toFixed(2),
       priceChange1h: token.priceChange1h?.toFixed(2) + '%',
       txns1h: token.txns1h,
-      url: pair.url,
     });
     
     return token;
   });
   
-  console.log('✅ Returning top 5 trending PumpFun tokens (by trendingScoreH1)');
+  console.log('✅ Returning', trendingTokens.length, 'trending tokens');
   return trendingTokens;
 }
 
@@ -317,7 +335,7 @@ export async function GET(request: NextRequest) {
       console.log('🔥 Trending request received');
       
       if (now - lastTrendingFetchTime > CACHE_DURATION || cachedTrendingTokens.length === 0) {
-        console.log('🔄 Fetching fresh PumpFun trending data (trendingScoreH1)...');
+        console.log('🔄 Fetching fresh trending data...');
         cachedTrendingTokens = await fetchTrendingTokens();
         lastTrendingFetchTime = now;
         console.log('💾 Trending cache updated with', cachedTrendingTokens.length, 'tokens');
