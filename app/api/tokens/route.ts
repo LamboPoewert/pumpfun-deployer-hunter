@@ -5,7 +5,7 @@ import { TokenData, DeployerStats } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-interface VolumeToken {
+interface TrendingToken {
   rank: number;
   symbol: string;
   name: string;
@@ -16,15 +16,17 @@ interface VolumeToken {
   priceChange24h: number;
   marketCap: number;
   txns1h: number;
+  buys1h: number;
+  sells1h: number;
   url: string;
   pairAddress: string;
 }
 
 // Cache for storing token data and deployer stats
 let cachedTokens: TokenData[] = [];
-let cachedVolumeTokens: VolumeToken[] = [];
+let cachedTrendingTokens: TrendingToken[] = [];
 let lastFetchTime = 0;
-let lastVolumeFetchTime = 0;
+let lastTrendingFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Using DexScreener API (NO API KEY NEEDED!)
@@ -86,11 +88,11 @@ async function fetchRecentTokens(): Promise<any[]> {
   }
 }
 
-async function fetchHighVolumeTokens(): Promise<VolumeToken[]> {
+async function fetchTrendingTokens(): Promise<TrendingToken[]> {
   try {
-    console.log('💰 Fetching high volume tokens from DexScreener...');
+    console.log('🔥 Fetching trending tokens from DexScreener...');
     
-    // Use the search endpoint with Solana - this is more reliable for volume data
+    // Fetch Solana pairs sorted by trending
     const response = await fetch(
       'https://api.dexscreener.com/latest/dex/search?q=SOL',
       {
@@ -102,34 +104,62 @@ async function fetchHighVolumeTokens(): Promise<VolumeToken[]> {
     );
     
     if (!response.ok) {
-      console.error('❌ DexScreener volume API error:', response.status);
+      console.error('❌ DexScreener trending API error:', response.status);
       return [];
     }
     
     const data = await response.json();
-    console.log('✅ Fetched volume data, pairs:', data.pairs?.length || 0);
+    console.log('✅ Fetched trending data, pairs:', data.pairs?.length || 0);
     
-    // Filter for pairs with actual volume data
-    const pairsWithVolume = (data.pairs || []).filter((pair: any) => {
-      // Must have 24h volume (h1 might not always be available)
-      const hasVolume = pair.volume?.h24 > 0;
-      const hasTxns = (pair.txns?.h24?.buys || 0) > 0;
+    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    
+    // Calculate trending score based on:
+    // - Recent price change
+    // - Transaction volume
+    // - Buy/sell ratio
+    // - Recent activity
+    const pairsWithActivity = (data.pairs || []).filter((pair: any) => {
+      const hasTxns = (pair.txns?.h1?.buys || 0) > 0;
+      const hasVolume = (pair.volume?.h1 || 0) > 0;
+      const hasPriceChange = pair.priceChange?.h1 !== undefined;
       
-      return hasVolume && hasTxns;
+      return hasTxns && hasVolume && hasPriceChange;
     });
     
-    console.log('✅ Found', pairsWithVolume.length, 'pairs with volume data');
+    console.log('✅ Found', pairsWithActivity.length, 'pairs with activity');
     
-    if (pairsWithVolume.length === 0) {
-      console.log('⚠️ No volume data found, returning empty array');
+    if (pairsWithActivity.length === 0) {
+      console.log('⚠️ No trending data found, returning empty array');
       return [];
     }
     
-    // Sort by 24h volume (more reliable than 1h)
-    const volumeTokens: VolumeToken[] = pairsWithVolume
-      .sort((a: any, b: any) => (b.volume?.h24 || 0) - (a.volume?.h24 || 0))
+    // Calculate trending score for each pair
+    const scoredPairs = pairsWithActivity.map((pair: any) => {
+      const priceChange1h = Math.abs(pair.priceChange?.h1 || 0);
+      const volume1h = pair.volume?.h1 || 0;
+      const txns1h = (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0);
+      const buys1h = pair.txns?.h1?.buys || 0;
+      const sells1h = pair.txns?.h1?.sells || 0;
+      
+      // Trending score formula:
+      // High weight on price change + transaction count + volume
+      const trendingScore = 
+        (priceChange1h * 2) +           // Price movement (2x weight)
+        (txns1h / 10) +                 // Transaction count
+        (Math.log(volume1h + 1) * 0.5) + // Volume (logarithmic)
+        (buys1h > sells1h ? 10 : 0);    // Bonus for more buys
+      
+      return {
+        ...pair,
+        trendingScore,
+      };
+    });
+    
+    // Sort by trending score and take top 5
+    const trendingTokens: TrendingToken[] = scoredPairs
+      .sort((a: any, b: any) => b.trendingScore - a.trendingScore)
       .slice(0, 5)
-      .map((pair: any, index: number): VolumeToken => {
+      .map((pair: any, index: number): TrendingToken => {
         const token = {
           rank: index + 1,
           symbol: pair.baseToken?.symbol || 'UNKNOWN',
@@ -141,25 +171,28 @@ async function fetchHighVolumeTokens(): Promise<VolumeToken[]> {
           priceChange24h: pair.priceChange?.h24 || 0,
           marketCap: pair.fdv || pair.liquidity?.usd || 0,
           txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
+          buys1h: pair.txns?.h1?.buys || 0,
+          sells1h: pair.txns?.h1?.sells || 0,
           url: pair.url || '',
           pairAddress: pair.pairAddress || '',
         };
         
-        console.log(`📊 Token ${index + 1}:`, {
+        console.log(`🔥 Trending #${index + 1}:`, {
           symbol: token.symbol,
-          volume24h: token.volume24h,
-          volume1h: token.volume1h,
+          priceChange1h: token.priceChange1h.toFixed(2) + '%',
+          txns1h: token.txns1h,
+          trendingScore: pair.trendingScore.toFixed(2),
         });
         
         return token;
       });
     
-    console.log('✅ Returning', volumeTokens.length, 'volume tokens');
+    console.log('✅ Returning', trendingTokens.length, 'trending tokens');
     
-    return volumeTokens;
+    return trendingTokens;
     
   } catch (error) {
-    console.error('❌ Error fetching volume tokens:', error);
+    console.error('❌ Error fetching trending tokens:', error);
     return [];
   }
 }
@@ -255,25 +288,25 @@ export async function GET(request: NextRequest) {
     const { searchParams } = request.nextUrl;
     const type = searchParams.get('type');
     
-    // Handle volume request
-    if (type === 'volume') {
-      console.log('🔍 Volume request received');
+    // Handle trending request
+    if (type === 'trending') {
+      console.log('🔥 Trending request received');
       
-      if (now - lastVolumeFetchTime > CACHE_DURATION || cachedVolumeTokens.length === 0) {
-        console.log('🔄 Fetching fresh volume data...');
-        cachedVolumeTokens = await fetchHighVolumeTokens();
-        lastVolumeFetchTime = now;
-        console.log('💾 Volume cache updated with', cachedVolumeTokens.length, 'tokens');
+      if (now - lastTrendingFetchTime > CACHE_DURATION || cachedTrendingTokens.length === 0) {
+        console.log('🔄 Fetching fresh trending data...');
+        cachedTrendingTokens = await fetchTrendingTokens();
+        lastTrendingFetchTime = now;
+        console.log('💾 Trending cache updated with', cachedTrendingTokens.length, 'tokens');
       } else {
-        console.log('✅ Using cached volume data (', cachedVolumeTokens.length, 'tokens)');
+        console.log('✅ Using cached trending data (', cachedTrendingTokens.length, 'tokens)');
       }
       
       return NextResponse.json({
         success: true,
-        tokens: cachedVolumeTokens,
-        lastUpdated: lastVolumeFetchTime,
-        nextUpdate: lastVolumeFetchTime + CACHE_DURATION,
-        count: cachedVolumeTokens.length,
+        tokens: cachedTrendingTokens,
+        lastUpdated: lastTrendingFetchTime,
+        nextUpdate: lastTrendingFetchTime + CACHE_DURATION,
+        count: cachedTrendingTokens.length,
       });
     }
     
