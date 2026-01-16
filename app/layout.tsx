@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { Analytics } from '@vercel/analytics/next';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -17,6 +18,7 @@ export default function RootLayout({
         <div className="cyber-grid"></div>
         <div className="scanline"></div>
         {children}
+        <Analytics />
       </body>
     </html>
   );
