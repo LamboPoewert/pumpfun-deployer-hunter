@@ -3,7 +3,9 @@ import { TokenData, DeployerStats } from '@/lib/types';
 
 // Cache for storing token data and deployer stats
 let cachedTokens: TokenData[] = [];
+let cachedVolumeTokens: any[] = [];
 let lastFetchTime = 0;
+let lastVolumeFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
 // Using DexScreener API (NO API KEY NEEDED!)
@@ -69,6 +71,68 @@ async function fetchRecentTokens(): Promise<any[]> {
     
   } catch (error) {
     console.error('❌ Error fetching tokens:', error);
+    return [];
+  }
+}
+
+async function fetchHighVolumeTokens(): Promise<any[]> {
+  try {
+    console.log('💰 Fetching high volume tokens from DexScreener...');
+    
+    // Fetch tokens sorted by volume
+    const response = await fetch(
+      'https://api.dexscreener.com/latest/dex/tokens/solana',
+      {
+        headers: {
+          'Accept': 'application/json',
+        }
+      }
+    );
+    
+    if (!response.ok) {
+      console.error('❌ DexScreener volume API error:', response.status);
+      return [];
+    }
+    
+    const data = await response.json();
+    console.log('✅ Fetched volume data');
+    
+    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    
+    // Get pairs with volume data from last hour
+    const volumeTokens = (data.pairs || [])
+      .filter((pair: any) => {
+        // Must have volume data
+        if (!pair.volume?.h1) return false;
+        
+        // Optional: Filter for recent activity
+        const hasRecentActivity = pair.txns?.h1?.buys > 0 || pair.txns?.h1?.sells > 0;
+        
+        return hasRecentActivity && pair.volume.h1 > 0;
+      })
+      .sort((a: any, b: any) => (b.volume?.h1 || 0) - (a.volume?.h1 || 0))
+      .slice(0, 5)
+      .map((pair: any, index: number) => ({
+        rank: index + 1,
+        symbol: pair.baseToken?.symbol || 'UNKNOWN',
+        name: pair.baseToken?.name || 'Unknown Token',
+        volume1h: pair.volume?.h1 || 0,
+        volume24h: pair.volume?.h24 || 0,
+        priceUsd: parseFloat(pair.priceUsd) || 0,
+        priceChange1h: pair.priceChange?.h1 || 0,
+        priceChange24h: pair.priceChange?.h24 || 0,
+        marketCap: pair.fdv || pair.liquidity?.usd || 0,
+        txns1h: (pair.txns?.h1?.buys || 0) + (pair.txns?.h1?.sells || 0),
+        url: pair.url || '',
+        pairAddress: pair.pairAddress || '',
+      }));
+    
+    console.log('✅ Found top 5 volume tokens:', volumeTokens.map(t => ({ symbol: t.symbol, volume: t.volume1h })));
+    
+    return volumeTokens;
+    
+  } catch (error) {
+    console.error('❌ Error fetching volume tokens:', error);
     return [];
   }
 }
@@ -183,7 +247,28 @@ export async function GET(request: NextRequest) {
     console.log('📡 API Route called');
     const now = Date.now();
     
-    // Check if we need to refresh the cache
+    // Check URL params
+    const url = new URL(request.url);
+    const type = url.searchParams.get('type');
+    
+    // Handle volume request
+    if (type === 'volume') {
+      if (now - lastVolumeFetchTime > CACHE_DURATION || cachedVolumeTokens.length === 0) {
+        console.log('🔄 Fetching volume data...');
+        cachedVolumeTokens = await fetchHighVolumeTokens();
+        lastVolumeFetchTime = now;
+        console.log('💾 Volume cache updated with', cachedVolumeTokens.length, 'tokens');
+      }
+      
+      return NextResponse.json({
+        success: true,
+        tokens: cachedVolumeTokens,
+        lastUpdated: lastVolumeFetchTime,
+        nextUpdate: lastVolumeFetchTime + CACHE_DURATION,
+      });
+    }
+    
+    // Handle regular token request
     if (now - lastFetchTime > CACHE_DURATION || cachedTokens.length === 0) {
       console.log('🔄 Cache expired or empty, fetching new data...');
       cachedTokens = await analyzeTokens();
