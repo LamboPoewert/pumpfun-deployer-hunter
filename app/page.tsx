@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { TokenData } from '@/lib/types';
 
-interface VolumeToken {
+interface TrendingToken {
   rank: number;
   symbol: string;
   name: string;
@@ -14,15 +14,17 @@ interface VolumeToken {
   priceChange24h: number;
   marketCap: number;
   txns1h: number;
+  buys1h: number;
+  sells1h: number;
   url: string;
   pairAddress: string;
 }
 
 export default function Home() {
   const [tokens, setTokens] = useState<TokenData[]>([]);
-  const [volumeTokens, setVolumeTokens] = useState<VolumeToken[]>([]);
+  const [trendingTokens, setTrendingTokens] = useState<TrendingToken[]>([]);
   const [loading, setLoading] = useState(true);
-  const [volumeLoading, setVolumeLoading] = useState(true);
+  const [trendingLoading, setTrendingLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<number>(0);
   const [nextUpdate, setNextUpdate] = useState<number>(0);
   const [timeUntilUpdate, setTimeUntilUpdate] = useState<number>(0);
@@ -45,30 +47,30 @@ export default function Home() {
     }
   };
 
-  const fetchVolumeTokens = async () => {
+  const fetchTrendingTokens = async () => {
     try {
-      setVolumeLoading(true);
-      const response = await fetch('/api/tokens?type=volume');
+      setTrendingLoading(true);
+      const response = await fetch('/api/tokens?type=trending');
       const data = await response.json();
       
       if (data.success) {
-        setVolumeTokens(data.tokens);
+        setTrendingTokens(data.tokens);
       }
     } catch (error) {
-      console.error('Failed to fetch volume tokens:', error);
+      console.error('Failed to fetch trending tokens:', error);
     } finally {
-      setVolumeLoading(false);
+      setTrendingLoading(false);
     }
   };
 
   useEffect(() => {
     fetchTokens();
-    fetchVolumeTokens();
+    fetchTrendingTokens();
     
     // Refresh every 5 minutes
     const interval = setInterval(() => {
       fetchTokens();
-      fetchVolumeTokens();
+      fetchTrendingTokens();
     }, 5 * 60 * 1000);
     
     return () => clearInterval(interval);
@@ -261,54 +263,55 @@ export default function Home() {
           )}
         </div>
 
-        {/* High Volume Section */}
+        {/* Trending Section */}
         <div className="mb-12">
           <h3 className="font-orbitron text-3xl font-bold text-center mb-8 tracking-wider">
             <span className="text-white">TOP 5</span>{' '}
-            <span className="text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500">
-              HIGHEST VOLUME
+            <span className="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-red-500">
+              TRENDING
             </span>
             <div className="font-rajdhani text-sm text-gray-400 mt-2 tracking-normal font-normal">
               LAST 60 MINUTES
             </div>
           </h3>
 
-          {volumeLoading && volumeTokens.length === 0 ? (
+          {trendingLoading && trendingTokens.length === 0 ? (
             <div className="text-center py-12">
               <div className="inline-block">
-                <div className="w-12 h-12 border-4 border-yellow-400 border-t-transparent rounded-full animate-spin"></div>
-                <p className="font-rajdhani text-lg text-yellow-400 mt-3">
-                  LOADING VOLUME DATA...
+                <div className="w-12 h-12 border-4 border-orange-400 border-t-transparent rounded-full animate-spin"></div>
+                <p className="font-rajdhani text-lg text-orange-400 mt-3">
+                  LOADING TRENDING DATA...
                 </p>
               </div>
             </div>
-          ) : volumeTokens.length === 0 ? (
+          ) : trendingTokens.length === 0 ? (
             <div className="hologram rounded-lg p-8 text-center">
               <p className="font-rajdhani text-xl text-gray-400">
-                NO VOLUME DATA AVAILABLE
+                NO TRENDING DATA AVAILABLE
               </p>
             </div>
           ) : (
             <div className="grid gap-4">
-              {volumeTokens.map((token) => (
+              {trendingTokens.map((token) => (
                 <div
                   key={token.pairAddress}
-                  className="hologram rounded-lg p-5 relative overflow-hidden group hover:border-yellow-400 transition-all duration-300"
+                  className="hologram rounded-lg p-5 relative overflow-hidden group hover:border-orange-400 transition-all duration-300"
                 >
                   <div className="flex items-center justify-between gap-4">
-                    {/* Rank */}
+                    {/* Rank with Fire Icon */}
                     <div className="flex-shrink-0">
-                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-yellow-400 to-orange-500 flex items-center justify-center">
-                        <span className="font-orbitron text-xl font-black text-gray-900">
+                      <div className="w-12 h-12 rounded-full bg-gradient-to-br from-orange-400 to-red-500 flex items-center justify-center relative">
+                        <span className="font-orbitron text-xl font-black text-white">
                           {token.rank}
                         </span>
+                        <div className="absolute -top-1 -right-1 text-xl">🔥</div>
                       </div>
                     </div>
 
                     {/* Token Info */}
                     <div className="flex-grow min-w-0">
                       <div className="flex items-center gap-2 mb-1">
-                        <h4 className="font-orbitron text-xl font-bold text-yellow-400 truncate">
+                        <h4 className="font-orbitron text-xl font-bold text-orange-400 truncate">
                           {token.symbol}
                         </h4>
                         <span className="font-rajdhani text-sm text-gray-400 truncate">
@@ -330,37 +333,36 @@ export default function Home() {
                             {token.priceChange1h >= 0 ? '+' : ''}{token.priceChange1h.toFixed(1)}%
                           </div>
                         </div>
+                        <div>
+                          <span className="font-rajdhani text-xs text-gray-500">TXNS</span>
+                          <div className="font-orbitron text-sm font-bold text-cyan-400">
+                            {token.txns1h}
+                          </div>
+                        </div>
                       </div>
                     </div>
 
-                    {/* Volume Stats */}
-                    <div className="flex-shrink-0 text-right">
-                      <div className="font-rajdhani text-xs text-gray-500 mb-1">
-                        1H VOLUME
-                      </div>
-                      <div className="font-orbitron text-2xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-yellow-400 to-orange-500">
-                        {formatVolume(token.volume1h)}
-                      </div>
-                      <div className="font-rajdhani text-xs text-gray-400 mt-1">
-                        {token.txns1h} txns
-                      </div>
-                    </div>
-
-                    {/* 24h Volume (smaller) */}
+                    {/* Activity Stats */}
                     <div className="hidden lg:block flex-shrink-0 text-right">
                       <div className="font-rajdhani text-xs text-gray-500 mb-1">
-                        24H VOLUME
+                        BUYS / SELLS
                       </div>
-                      <div className="font-orbitron text-lg font-bold text-gray-400">
-                        {formatVolume(token.volume24h)}
+                      <div className="flex items-center gap-2 justify-end">
+                        <span className="font-orbitron text-sm font-bold text-green-400">
+                          {token.buys1h}
+                        </span>
+                        <span className="text-gray-500">/</span>
+                        <span className="font-orbitron text-sm font-bold text-red-400">
+                          {token.sells1h}
+                        </span>
                       </div>
                     </div>
                   </div>
 
                   {/* Glow effect on hover */}
                   <div className="absolute inset-0 rounded-lg pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
-                    <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-yellow-400 to-transparent"></div>
-                    <div className="absolute bottom-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-orange-500 to-transparent"></div>
+                    <div className="absolute top-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-orange-400 to-transparent"></div>
+                    <div className="absolute bottom-0 left-0 w-full h-[2px] bg-gradient-to-r from-transparent via-red-500 to-transparent"></div>
                   </div>
                 </div>
               ))}
