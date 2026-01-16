@@ -1,9 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { TokenData, DeployerStats } from '@/lib/types';
 
+interface VolumeToken {
+  rank: number;
+  symbol: string;
+  name: string;
+  volume1h: number;
+  volume24h: number;
+  priceUsd: number;
+  priceChange1h: number;
+  priceChange24h: number;
+  marketCap: number;
+  txns1h: number;
+  url: string;
+  pairAddress: string;
+}
+
 // Cache for storing token data and deployer stats
 let cachedTokens: TokenData[] = [];
-let cachedVolumeTokens: any[] = [];
+let cachedVolumeTokens: VolumeToken[] = [];
 let lastFetchTime = 0;
 let lastVolumeFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
@@ -75,7 +90,7 @@ async function fetchRecentTokens(): Promise<any[]> {
   }
 }
 
-async function fetchHighVolumeTokens(): Promise<any[]> {
+async function fetchHighVolumeTokens(): Promise<VolumeToken[]> {
   try {
     console.log('💰 Fetching high volume tokens from DexScreener...');
     
@@ -97,10 +112,8 @@ async function fetchHighVolumeTokens(): Promise<any[]> {
     const data = await response.json();
     console.log('✅ Fetched volume data');
     
-    const oneHourAgo = Date.now() - (60 * 60 * 1000);
-    
     // Get pairs with volume data from last hour
-    const volumeTokens = (data.pairs || [])
+    const volumeTokens: VolumeToken[] = (data.pairs || [])
       .filter((pair: any) => {
         // Must have volume data
         if (!pair.volume?.h1) return false;
@@ -112,7 +125,7 @@ async function fetchHighVolumeTokens(): Promise<any[]> {
       })
       .sort((a: any, b: any) => (b.volume?.h1 || 0) - (a.volume?.h1 || 0))
       .slice(0, 5)
-      .map((pair: any, index: number) => ({
+      .map((pair: any, index: number): VolumeToken => ({
         rank: index + 1,
         symbol: pair.baseToken?.symbol || 'UNKNOWN',
         name: pair.baseToken?.name || 'Unknown Token',
@@ -127,7 +140,7 @@ async function fetchHighVolumeTokens(): Promise<any[]> {
         pairAddress: pair.pairAddress || '',
       }));
     
-    console.log('✅ Found top 5 volume tokens:', volumeTokens.map(t => ({ symbol: t.symbol, volume: t.volume1h })));
+    console.log('✅ Found top 5 volume tokens:', volumeTokens.map((t: VolumeToken) => ({ symbol: t.symbol, volume: t.volume1h })));
     
     return volumeTokens;
     
