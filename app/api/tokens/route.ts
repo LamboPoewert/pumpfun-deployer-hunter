@@ -10,17 +10,20 @@ let cachedTokens: TokenData[] = [];
 let lastFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-// Cache for creator addresses to avoid repeated lookups
+// Cache for creator addresses
 const creatorCache = new Map<string, string>();
 
-async function fetchCreatorFromSolana(tokenMint: string): Promise<string> {
+async function fetchCreatorFromMetadata(tokenMint: string): Promise<string> {
   // Check cache first
   if (creatorCache.has(tokenMint)) {
     return creatorCache.get(tokenMint)!;
   }
   
   try {
-    // Use Helius free RPC to get token metadata
+    // Derive the metadata PDA (Program Derived Address)
+    // Metadata is stored at: [metadata_program, 'metadata', mint]
+    // For now, we'll use a simpler approach - fetch from Helius DAS API
+    
     const response = await fetch('https://api.mainnet-beta.solana.com', {
       method: 'POST',
       headers: {
@@ -29,27 +32,37 @@ async function fetchCreatorFromSolana(tokenMint: string): Promise<string> {
       body: JSON.stringify({
         jsonrpc: '2.0',
         id: 1,
-        method: 'getAccountInfo',
-        params: [
-          tokenMint,
-          {
-            encoding: 'jsonParsed',
-          },
-        ],
+        method: 'getAsset',
+        params: {
+          id: tokenMint,
+        },
       }),
     });
     
     const data = await response.json();
     
-    // Try to extract owner/authority from the account
-    const owner = data?.result?.value?.owner || 'unknown';
+    // Try to get creator from result
+    const creators = data?.result?.creators;
+    if (creators && creators.length > 0) {
+      const creator = creators[0].address;
+      console.log(`  Found creator from metadata: ${creator.substring(0, 8)}...`);
+      creatorCache.set(tokenMint, creator);
+      return creator;
+    }
     
-    // Cache the result
-    creatorCache.set(tokenMint, owner);
+    // Fallback: try to get from authority
+    const authority = data?.result?.authority;
+    if (authority) {
+      console.log(`  Found authority: ${authority.substring(0, 8)}...`);
+      creatorCache.set(tokenMint, authority);
+      return authority;
+    }
     
-    return owner;
+    console.log(`  No creator found in metadata for ${tokenMint}`);
+    return 'unknown';
+    
   } catch (error) {
-    console.error('Error fetching creator for', tokenMint, error);
+    console.error('Error fetching creator metadata:', error);
     return 'unknown';
   }
 }
@@ -78,11 +91,10 @@ async function fetchRealPumpFunTokens(): Promise<any[]> {
     
     console.log('✅ Fetched', pairs.length, 'pairs from DexScreener');
     
-    // Filter for actual PumpFun tokens
+    // Filter for PumpFun tokens
     const pumpFunPairs = pairs.filter((pair: any) => {
       return pair.dexId === 'pumpfun' ||
-             pair.url?.includes('pump.fun') || 
-             pair.labels?.includes('pump.fun');
+             pair.url?.includes('pump.fun');
     });
     
     console.log('✅ Found', pumpFunPairs.length, 'PumpFun tokens');
@@ -122,31 +134,27 @@ async function analyzeTokens(): Promise<TokenData[]> {
     
     console.log('📊 Processing', pumpFunPairs.length, 'PumpFun tokens');
     
-    // Convert to our format (limit to first 10 to avoid too many RPC calls)
+    // Process first 10 to avoid too many RPC calls
     const tokensToProcess = pumpFunPairs.slice(0, 10);
     
     const tokens = await Promise.all(tokensToProcess.map(async (pair: any, index: number) => {
       const tokenMint = pair.baseToken?.address || 'unknown';
       
-      // Fetch real creator from Solana blockchain
-      console.log(`Fetching creator for token ${index + 1}/${tokensToProcess.length}: ${pair.baseToken?.symbol}`);
-      const creator = await fetchCreatorFromSolana(tokenMint);
+      console.log(`🔍 Fetching creator for ${pair.baseToken?.symbol} (${index + 1}/${tokensToProcess.length})`);
       
-      const deployerStats = await calculateDeployerStats(creator);
+      // Fetch creator from metadata
+      const creator = await fetchCreatorFromMetadata(tokenMint);
+      
+      const deployerStats = await calculateDeployerStats(creator !== 'unknown' ? creator : tokenMint);
       
       // Calculate holders from transaction data
       const txnBuys24h = pair.txns?.h24?.buys || 0;
       const txnSells24h = pair.txns?.h24?.sells || 0;
       const totalTxns = txnBuys24h + txnSells24h;
       
-      // Estimate holders
       const estimatedHolders = Math.max(1, Math.floor(totalTxns / 4));
       
-      const createdTimestamp = pair.pairCreatedAt 
-        ? new Date(pair.pairCreatedAt).getTime()
-        : Date.now();
-      
-      console.log(`  ${pair.baseToken?.symbol}: Creator ${creator.substring(0, 8)}...`);
+      const createdTimestamp = pair.pairCreatedAt || Date.now();
       
       return {
         mint: tokenMint,
@@ -154,22 +162,20 @@ async function analyzeTokens(): Promise<TokenData[]> {
         symbol: pair.baseToken?.symbol || 'UNKNOWN',
         uri: pair.url || 'https://pump.fun',
         marketCap: pair.fdv || pair.liquidity?.usd || 0,
-        deployer: creator,
+        deployer: creator !== 'unknown' ? creator : tokenMint,
         holders: estimatedHolders,
         createdAt: createdTimestamp,
         bondingRate: deployerStats.bondingRate,
       };
     }));
     
-    // Filter for recent tokens (last 24 hours)
+    // Filter for recent tokens
     const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
     const recentTokens = tokens.filter(token => token.createdAt > twentyFourHoursAgo);
     
     console.log('✅ Found', recentTokens.length, 'tokens from last 24 hours');
     
-    const tokensToRank = recentTokens.length > 0 ? recentTokens : tokens;
-    
-    return processTokens(tokensToRank);
+    return processTokens(recentTokens.length > 0 ? recentTokens : tokens);
     
   } catch (error) {
     console.error('❌ Error analyzing tokens:', error);
@@ -178,14 +184,8 @@ async function analyzeTokens(): Promise<TokenData[]> {
 }
 
 async function processTokens(tokens: any[]): Promise<TokenData[]> {
-  if (tokens.length === 0) {
-    console.log('⚠️ No tokens to process');
-    return [];
-  }
+  if (tokens.length === 0) return [];
   
-  console.log('✅ Processing', tokens.length, 'tokens');
-  
-  // Sort by holder count and take top 5
   const rankedTokens = tokens
     .sort((a, b) => b.holders - a.holders)
     .slice(0, 5)
@@ -208,7 +208,7 @@ export async function GET(request: NextRequest) {
     const now = Date.now();
     
     if (now - lastFetchTime > CACHE_DURATION || cachedTokens.length === 0) {
-      console.log('🔄 Fetching fresh PumpFun data...');
+      console.log('🔄 Fetching fresh data...');
       cachedTokens = await analyzeTokens();
       lastFetchTime = now;
       console.log('💾 Cache updated with', cachedTokens.length, 'tokens');
