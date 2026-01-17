@@ -94,23 +94,24 @@ async function analyzeTokens(): Promise<TokenData[]> {
       return [];
     }
     
+    // Filter for tokens created in last 60 minutes with minimum market cap
     const filteredTokens = recentTokens.filter(token => {
-      const meetsHolderRequirement = token.holders >= 15;
       const meetsMarketCapRequirement = token.marketCap >= 6000;
-      
-      return meetsHolderRequirement && meetsMarketCapRequirement;
+      return meetsMarketCapRequirement;
     });
     
-    console.log('✅ Filtered to', filteredTokens.length, 'qualified tokens');
+    console.log('✅ Filtered to', filteredTokens.length, 'tokens with 6K+ market cap');
     
     if (filteredTokens.length === 0) {
       console.log('⚠️ No tokens meet the criteria');
       return [];
     }
     
+    // Get unique deployers
     const deployers = [...new Set(filteredTokens.map(t => t.deployer))];
     console.log('📊 Found', deployers.length, 'unique deployers');
     
+    // Calculate deployer stats
     const deployerStatsMap = new Map<string, DeployerStats>();
     
     for (const deployer of deployers) {
@@ -118,10 +119,12 @@ async function analyzeTokens(): Promise<TokenData[]> {
       deployerStatsMap.set(deployer, stats);
     }
     
-    const qualifiedTokens = filteredTokens
+    // Filter for UNBONDED tokens (deployer bonding rate < 50%)
+    const unbondedTokens = filteredTokens
       .filter(token => {
         const deployerStats = deployerStatsMap.get(token.deployer);
-        return deployerStats && deployerStats.bondingRate > 50;
+        // Include tokens where deployer has NOT bonded 50% of previous tokens
+        return deployerStats && deployerStats.bondingRate < 50;
       })
       .map(token => {
         const deployerStats = deployerStatsMap.get(token.deployer)!;
@@ -131,17 +134,21 @@ async function analyzeTokens(): Promise<TokenData[]> {
         } as TokenData;
       });
     
-    console.log('✅ Found', qualifiedTokens.length, 'qualified tokens with good deployers');
+    console.log('✅ Found', unbondedTokens.length, 'unbonded tokens (deployers with <50% bonding rate)');
     
-    const rankedTokens = qualifiedTokens
-      .sort((a, b) => b.bondingRate - a.bondingRate)
-      .slice(0, 10)
+    // Sort by holder count (highest first) and take top 5
+    const rankedTokens = unbondedTokens
+      .sort((a, b) => b.holders - a.holders)
+      .slice(0, 5)
       .map((token, index) => ({
         ...token,
         rank: index + 1,
       }));
     
-    console.log('🏆 Returning top', rankedTokens.length, 'tokens');
+    console.log('🏆 Returning top 5 unbonded tokens with most holders');
+    rankedTokens.forEach(token => {
+      console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, ${token.bondingRate.toFixed(1)}% deployer bonding rate`);
+    });
     
     return rankedTokens;
     
