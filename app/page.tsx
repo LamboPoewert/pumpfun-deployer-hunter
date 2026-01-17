@@ -143,9 +143,21 @@ export default function Home() {
                         <h4 className="font-orbitron text-2xl font-bold text-cyan-400 mb-1">
                           {token.symbol}
                         </h4>
-                        <p className="font-rajdhani text-lg text-gray-300">
-                          {token.name}
-                        </p>
+                        {token.uri && (
+                          <a 
+                            href={token.uri}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="font-rajdhani text-lg text-gray-300 hover:text-cyan-400 transition-colors underline decoration-dotted underline-offset-2 inline-block"
+                          >
+                            {token.name}
+                          </a>
+                        )}
+                        {!token.uri && (
+                          <p className="font-rajdhani text-lg text-gray-300">
+                            {token.name}
+                          </p>
+                        )}
                       </div>
                       <div className="text-right">
                         <div className="font-orbitron text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-cyan-400">
