@@ -1,4 +1,5 @@
 export interface TokenData {
+  rank: number;
   mint: string;
   name: string;
   symbol: string;
@@ -6,9 +7,11 @@ export interface TokenData {
   marketCap: number;
   deployer: string;
   holders: number;
-  bondingRate: number;
   createdAt: number;
-  rank: number;
+  bondingRate: number;
+  priceUsd?: number;
+  volume24h?: number;
+  priceChange24h?: number;
 }
 
 export interface DeployerStats {

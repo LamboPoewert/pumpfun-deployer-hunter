@@ -40,7 +40,7 @@ async function generateMockTokens(): Promise<TokenData[]> {
   
   for (let i = 0; i < 5; i++) {
     const token = tokenNames[i];
-    const deployer = `CkwPTqR3${i}yGpMtx7LnP9vQz2K4Hd${i}NsFb8Wj6VmXc`; // Mock Solana address
+    const deployer = `CkwPTqR3${i}yGpMtx7LnP9vQz2K4Hd${i}NsFb8Wj6VmXc`;
     const deployerStats = await calculateDeployerStats(deployer);
     
     const tokenData: TokenData = {
@@ -53,9 +53,6 @@ async function generateMockTokens(): Promise<TokenData[]> {
       deployer: deployer,
       holders: 100 - (i * 15), // 100, 85, 70, 55, 40
       createdAt: now - (i * 10 * 60 * 1000), // 0, 10, 20, 30, 40 minutes ago
-      priceUsd: 0.001 * (5 - i),
-      volume24h: 5000 - (i * 800),
-      priceChange24h: (Math.random() - 0.5) * 50,
       bondingRate: deployerStats.bondingRate,
     };
     
@@ -65,55 +62,36 @@ async function generateMockTokens(): Promise<TokenData[]> {
       symbol: tokenData.symbol,
       holders: tokenData.holders,
       rank: tokenData.rank,
-      marketCap: tokenData.marketCap,
     });
   }
   
   console.log('✅ Successfully generated 5 mock tokens');
-  console.log('📊 Token summary:');
-  tokens.forEach(t => {
-    console.log(`    #${t.rank}: ${t.symbol} - ${t.holders} holders, $${t.marketCap} market cap`);
-  });
   
   return tokens;
 }
 
 export async function GET(request: NextRequest) {
   try {
-    console.log('📡 ========================================');
     console.log('📡 API Route /api/tokens called');
-    console.log('📡 ========================================');
     
     const now = Date.now();
     
-    // Always generate fresh data for debugging
+    // Always generate fresh data
     console.log('🔄 Generating fresh mock data...');
-    const freshTokens = await generateMockTokens();
-    cachedTokens = freshTokens;
+    cachedTokens = await generateMockTokens();
     lastFetchTime = now;
     
-    console.log('💾 Cache updated with', cachedTokens.length, 'tokens');
-    console.log('📤 Returning response with tokens:', cachedTokens.length);
+    console.log('💾 Returning', cachedTokens.length, 'tokens');
     
-    const response = {
+    return NextResponse.json({
       success: true,
       tokens: cachedTokens,
       lastUpdated: lastFetchTime,
       nextUpdate: lastFetchTime + CACHE_DURATION,
-      count: cachedTokens.length,
-      message: cachedTokens.length === 0 ? 'No tokens generated' : `${cachedTokens.length} mock tokens generated`,
-    };
-    
-    console.log('📤 Response:', JSON.stringify(response, null, 2));
-    console.log('📡 ========================================');
-    
-    return NextResponse.json(response);
+    });
     
   } catch (error) {
-    console.error('❌ ========================================');
     console.error('❌ API Error:', error);
-    console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack');
-    console.error('❌ ========================================');
     
     return NextResponse.json(
       { 
