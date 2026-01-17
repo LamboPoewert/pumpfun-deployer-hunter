@@ -10,48 +10,6 @@ let cachedTokens: TokenData[] = [];
 let lastFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-// Fetch tokens from PumpPortal API
-async function fetchPumpPortalTokens(): Promise<any[]> {
-  try {
-    console.log('🔍 Fetching tokens from PumpPortal API...');
-    
-    // Try PumpPortal's REST API endpoint for recent tokens
-    const response = await fetch(
-      'https://frontend-api.pump.fun/coins?limit=100&includeNsfw=false',
-      {
-        headers: {
-          'Accept': 'application/json',
-        },
-        cache: 'no-store',
-      }
-    );
-    
-    if (!response.ok) {
-      console.error('❌ PumpPortal API error:', response.status);
-      return [];
-    }
-    
-    const data = await response.json();
-    console.log('✅ Fetched', data.length || 0, 'tokens from PumpPortal');
-    
-    if (data.length > 0) {
-      const sample = data[0];
-      console.log('📝 Sample token structure:', {
-        symbol: sample.symbol,
-        name: sample.name,
-        creator: sample.creator,
-        created: sample.created_timestamp,
-      });
-    }
-    
-    return data;
-    
-  } catch (error) {
-    console.error('❌ Error fetching from PumpPortal:', error);
-    return [];
-  }
-}
-
 async function calculateDeployerStats(deployer: string): Promise<DeployerStats> {
   const hash = deployer.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const totalTokens = 5 + (hash % 15);
@@ -66,136 +24,103 @@ async function calculateDeployerStats(deployer: string): Promise<DeployerStats> 
   };
 }
 
-async function analyzeTokens(): Promise<TokenData[]> {
-  try {
-    console.log('🚀 Starting token analysis...');
+async function generateMockTokens(): Promise<TokenData[]> {
+  console.log('🎲 Generating mock PumpFun tokens...');
+  
+  const tokenNames = [
+    { symbol: 'PEPE', name: 'Pepe Coin' },
+    { symbol: 'DOGE', name: 'Doge Meme' },
+    { symbol: 'SHIB', name: 'Shiba Inu' },
+    { symbol: 'FLOKI', name: 'Floki Coin' },
+    { symbol: 'BONK', name: 'Bonk Token' },
+  ];
+  
+  const tokens: TokenData[] = [];
+  const now = Date.now();
+  
+  for (let i = 0; i < 5; i++) {
+    const token = tokenNames[i];
+    const deployer = `CkwPTqR3${i}yGpMtx7LnP9vQz2K4Hd${i}NsFb8Wj6VmXc`; // Mock Solana address
+    const deployerStats = await calculateDeployerStats(deployer);
     
-    const pumpTokens = await fetchPumpPortalTokens();
+    const tokenData: TokenData = {
+      rank: i + 1,
+      mint: `7xKXt${i}ZnP9Qm2yVw3Rd5Hc${i}8Lf4Gk6Bj1Ns9TvXm`,
+      name: token.name,
+      symbol: token.symbol,
+      uri: `https://pump.fun/coin/${token.symbol.toLowerCase()}`,
+      marketCap: 10000 + (i * 5000),
+      deployer: deployer,
+      holders: 100 - (i * 15), // 100, 85, 70, 55, 40
+      createdAt: now - (i * 10 * 60 * 1000), // 0, 10, 20, 30, 40 minutes ago
+      priceUsd: 0.001 * (5 - i),
+      volume24h: 5000 - (i * 800),
+      priceChange24h: (Math.random() - 0.5) * 50,
+      bondingRate: deployerStats.bondingRate,
+    };
     
-    if (pumpTokens.length === 0) {
-      console.log('⚠️ No tokens found from PumpPortal');
-      return [];
-    }
+    tokens.push(tokenData);
     
-    console.log('📊 Processing', pumpTokens.length, 'PumpFun tokens');
-    
-    // Convert to our format
-    const tokens = pumpTokens.map((token: any) => {
-      // Calculate holders from transaction data
-      const holders = (token.usd_market_cap && token.usd_market_cap > 1000) 
-        ? Math.floor(Math.random() * 50) + 10 // Estimate based on market cap
-        : Math.floor(Math.random() * 20) + 1;
-      
-      return {
-        mint: token.mint || 'unknown',
-        name: token.name || 'Unknown Token',
-        symbol: token.symbol || 'UNKNOWN',
-        uri: token.image_uri || token.twitter || '',
-        marketCap: token.usd_market_cap || 0,
-        deployer: token.creator || 'unknown',
-        holders: holders,
-        createdAt: token.created_timestamp ? token.created_timestamp * 1000 : Date.now(),
-        priceUsd: 0,
-        volume24h: 0,
-        priceChange24h: 0,
-      };
+    console.log(`  Created token #${i + 1}:`, {
+      symbol: tokenData.symbol,
+      holders: tokenData.holders,
+      rank: tokenData.rank,
+      marketCap: tokenData.marketCap,
     });
-    
-    // Filter for tokens from last 60 minutes
-    const oneHourAgo = Date.now() - (60 * 60 * 1000);
-    const recentTokens = tokens.filter(token => token.createdAt > oneHourAgo);
-    
-    console.log('✅ Found', recentTokens.length, 'tokens from last 60 minutes');
-    
-    // If no recent tokens, use last 24 hours
-    if (recentTokens.length === 0) {
-      const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
-      const last24h = tokens.filter(token => token.createdAt > twentyFourHoursAgo);
-      console.log('⚠️ No tokens in last hour, using last 24 hours:', last24h.length);
-      return await processTokens(last24h);
-    }
-    
-    return await processTokens(recentTokens);
-    
-  } catch (error) {
-    console.error('❌ Error analyzing tokens:', error);
-    return [];
-  }
-}
-
-async function processTokens(tokens: any[]): Promise<TokenData[]> {
-  if (tokens.length === 0) return [];
-  
-  // Get unique deployers
-  const deployers = [...new Set(tokens.map(t => t.deployer))];
-  console.log('📊 Found', deployers.length, 'unique deployers');
-  
-  // Calculate deployer stats
-  const deployerStatsMap = new Map<string, DeployerStats>();
-  
-  for (const deployer of deployers) {
-    const stats = await calculateDeployerStats(deployer);
-    deployerStatsMap.set(deployer, stats);
   }
   
-  // Map all tokens with deployer stats
-  const tokensWithStats = tokens.map(token => {
-    const deployerStats = deployerStatsMap.get(token.deployer);
-    return {
-      ...token,
-      bondingRate: deployerStats?.bondingRate || 0,
-    } as TokenData;
+  console.log('✅ Successfully generated 5 mock tokens');
+  console.log('📊 Token summary:');
+  tokens.forEach(t => {
+    console.log(`    #${t.rank}: ${t.symbol} - ${t.holders} holders, $${t.marketCap} market cap`);
   });
   
-  console.log('✅ Processing', tokensWithStats.length, 'tokens');
-  
-  // Sort by holder count (highest first) and take top 5
-  const rankedTokens = tokensWithStats
-    .sort((a, b) => b.holders - a.holders)
-    .slice(0, 5)
-    .map((token, index) => ({
-      ...token,
-      rank: index + 1,
-    }));
-  
-  console.log('🏆 Returning top 5 tokens with most holders:');
-  rankedTokens.forEach(token => {
-    console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, $${token.marketCap?.toFixed(0) || 0} market cap`);
-  });
-  
-  return rankedTokens;
+  return tokens;
 }
 
 export async function GET(request: NextRequest) {
   try {
-    console.log('📡 API Route called');
+    console.log('📡 ========================================');
+    console.log('📡 API Route /api/tokens called');
+    console.log('📡 ========================================');
+    
     const now = Date.now();
     
-    // Handle regular token request
-    if (now - lastFetchTime > CACHE_DURATION || cachedTokens.length === 0) {
-      console.log('🔄 Fetching new data from PumpPortal...');
-      cachedTokens = await analyzeTokens();
-      lastFetchTime = now;
-      console.log('💾 Cache updated with', cachedTokens.length, 'tokens');
-    } else {
-      console.log('✅ Using cached data (', cachedTokens.length, 'tokens)');
-    }
+    // Always generate fresh data for debugging
+    console.log('🔄 Generating fresh mock data...');
+    const freshTokens = await generateMockTokens();
+    cachedTokens = freshTokens;
+    lastFetchTime = now;
     
-    return NextResponse.json({
+    console.log('💾 Cache updated with', cachedTokens.length, 'tokens');
+    console.log('📤 Returning response with tokens:', cachedTokens.length);
+    
+    const response = {
       success: true,
       tokens: cachedTokens,
       lastUpdated: lastFetchTime,
       nextUpdate: lastFetchTime + CACHE_DURATION,
-      message: cachedTokens.length === 0 ? 'No tokens found from PumpPortal' : undefined,
-    });
+      count: cachedTokens.length,
+      message: cachedTokens.length === 0 ? 'No tokens generated' : `${cachedTokens.length} mock tokens generated`,
+    };
+    
+    console.log('📤 Response:', JSON.stringify(response, null, 2));
+    console.log('📡 ========================================');
+    
+    return NextResponse.json(response);
     
   } catch (error) {
+    console.error('❌ ========================================');
     console.error('❌ API Error:', error);
+    console.error('❌ Error stack:', error instanceof Error ? error.stack : 'No stack');
+    console.error('❌ ========================================');
+    
     return NextResponse.json(
       { 
         success: false, 
-        error: 'Failed to fetch tokens',
-        message: error instanceof Error ? error.message : 'Unknown error'
+        error: 'Failed to generate tokens',
+        message: error instanceof Error ? error.message : 'Unknown error',
+        tokens: [],
       },
       { status: 500 }
     );
