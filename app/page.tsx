@@ -95,12 +95,12 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Good Deployers Section */}
+        {/* Token List Section */}
         <div className="mb-12">
           <h3 className="font-orbitron text-3xl font-bold text-center mb-8 tracking-wider">
             <span className="text-white">TOP 5</span>{' '}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500">
-              UNBONDED TOKENS
+              BY HOLDERS
             </span>
           </h3>
 
@@ -211,7 +211,7 @@ export default function Home() {
         <div className="text-center mt-12 font-rajdhani text-sm text-gray-500">
           <p>AUTO-REFRESHING EVERY 5 MINUTES</p>
           <p className="mt-2">
-            CRITERIA: 6K+ MARKET CAP • &lt;50% DEPLOYER BONDING RATE • CREATED &lt;60 MIN • RANKED BY HOLDERS
+            CRITERIA: 6K+ MARKET CAP • CREATED &lt;60 MIN • RANKED BY HOLDERS
           </p>
         </div>
       </div>

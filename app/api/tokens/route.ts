@@ -111,7 +111,7 @@ async function analyzeTokens(): Promise<TokenData[]> {
     const deployers = [...new Set(filteredTokens.map(t => t.deployer))];
     console.log('📊 Found', deployers.length, 'unique deployers');
     
-    // Calculate deployer stats
+    // Calculate deployer stats for display purposes
     const deployerStatsMap = new Map<string, DeployerStats>();
     
     for (const deployer of deployers) {
@@ -119,25 +119,19 @@ async function analyzeTokens(): Promise<TokenData[]> {
       deployerStatsMap.set(deployer, stats);
     }
     
-    // Filter for UNBONDED tokens (deployer bonding rate < 50%)
-    const unbondedTokens = filteredTokens
-      .filter(token => {
-        const deployerStats = deployerStatsMap.get(token.deployer);
-        // Include tokens where deployer has NOT bonded 50% of previous tokens
-        return deployerStats && deployerStats.bondingRate < 50;
-      })
-      .map(token => {
-        const deployerStats = deployerStatsMap.get(token.deployer)!;
-        return {
-          ...token,
-          bondingRate: deployerStats.bondingRate,
-        } as TokenData;
-      });
+    // Map all tokens with deployer stats (no bonding rate filter)
+    const tokensWithStats = filteredTokens.map(token => {
+      const deployerStats = deployerStatsMap.get(token.deployer);
+      return {
+        ...token,
+        bondingRate: deployerStats?.bondingRate || 0,
+      } as TokenData;
+    });
     
-    console.log('✅ Found', unbondedTokens.length, 'unbonded tokens (deployers with <50% bonding rate)');
+    console.log('✅ Processing', tokensWithStats.length, 'tokens (no bonding rate filter)');
     
     // Sort by holder count (highest first) and take top 5
-    const rankedTokens = unbondedTokens
+    const rankedTokens = tokensWithStats
       .sort((a, b) => b.holders - a.holders)
       .slice(0, 5)
       .map((token, index) => ({
@@ -145,7 +139,7 @@ async function analyzeTokens(): Promise<TokenData[]> {
         rank: index + 1,
       }));
     
-    console.log('🏆 Returning top 5 unbonded tokens with most holders');
+    console.log('🏆 Returning top 5 tokens with most holders');
     rankedTokens.forEach(token => {
       console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, ${token.bondingRate.toFixed(1)}% deployer bonding rate`);
     });
