@@ -223,7 +223,7 @@ export default function Home() {
         <div className="text-center mt-12 font-rajdhani text-sm text-gray-500">
           <p>AUTO-REFRESHING EVERY 5 MINUTES</p>
           <p className="mt-2">
-            CRITERIA: 6K+ MARKET CAP • CREATED &lt;60 MIN • RANKED BY HOLDERS
+            CRITERIA: 160+ HOLDERS • $15K+ MARKET CAP • RANKED BY HOLDERS
           </p>
         </div>
       </div>
