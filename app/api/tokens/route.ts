@@ -10,38 +10,54 @@ let cachedTokens: TokenData[] = [];
 let lastFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-async function testPumpFunAPI(): Promise<void> {
-  console.log('🧪 Testing PumpFun API endpoint...');
-  
+async function fetchRealPumpFunTokens(): Promise<any[]> {
   try {
-    const response = await fetch('https://frontend-api.pump.fun/coins?limit=10&includeNsfw=false', {
-      headers: {
-        'Accept': 'application/json',
-      },
-      cache: 'no-store',
+    console.log('🔍 Fetching real PumpFun tokens from DexScreener...');
+    
+    // DexScreener tracks all Solana DEX pairs including PumpFun
+    const response = await fetch(
+      'https://api.dexscreener.com/latest/dex/search/?q=pump.fun',
+      {
+        headers: {
+          'Accept': 'application/json',
+        },
+        cache: 'no-store',
+      }
+    );
+    
+    if (!response.ok) {
+      console.error('❌ DexScreener API error:', response.status);
+      return [];
+    }
+    
+    const data = await response.json();
+    const pairs = data.pairs || [];
+    
+    console.log('✅ Fetched', pairs.length, 'pairs from DexScreener');
+    
+    // Filter for actual PumpFun tokens (check URL contains pump.fun)
+    const pumpFunPairs = pairs.filter((pair: any) => {
+      return pair.url?.includes('pump.fun') || 
+             pair.labels?.includes('pump.fun') ||
+             pair.dexId?.toLowerCase().includes('pump');
     });
     
-    console.log('📡 Response status:', response.status);
-    console.log('📡 Response headers:', Object.fromEntries(response.headers.entries()));
+    console.log('✅ Found', pumpFunPairs.length, 'PumpFun tokens');
     
-    const text = await response.text();
-    console.log('📡 Response body (first 500 chars):', text.substring(0, 500));
-    
-    try {
-      const json = JSON.parse(text);
-      console.log('📡 Parsed JSON:', json);
-      console.log('📡 Data type:', typeof json, Array.isArray(json) ? 'Array' : 'Object');
-      if (Array.isArray(json)) {
-        console.log('📡 Array length:', json.length);
-        if (json.length > 0) {
-          console.log('📡 First item:', JSON.stringify(json[0], null, 2));
-        }
-      }
-    } catch (parseError) {
-      console.log('❌ Failed to parse as JSON:', parseError);
+    if (pumpFunPairs.length > 0) {
+      console.log('📝 Sample token:', {
+        symbol: pumpFunPairs[0].baseToken?.symbol,
+        name: pumpFunPairs[0].baseToken?.name,
+        url: pumpFunPairs[0].url,
+        created: pumpFunPairs[0].pairCreatedAt,
+      });
     }
+    
+    return pumpFunPairs;
+    
   } catch (error) {
-    console.log('❌ Fetch error:', error);
+    console.error('❌ Error fetching from DexScreener:', error);
+    return [];
   }
 }
 
@@ -59,67 +75,112 @@ async function calculateDeployerStats(deployer: string): Promise<DeployerStats> 
   };
 }
 
-async function generateMockTokens(): Promise<TokenData[]> {
-  console.log('🎲 Generating mock tokens as fallback...');
-  
-  const tokenNames = [
-    { symbol: 'PEPE', name: 'Pepe Coin' },
-    { symbol: 'DOGE', name: 'Doge Meme' },
-    { symbol: 'SHIB', name: 'Shiba Inu' },
-    { symbol: 'FLOKI', name: 'Floki Coin' },
-    { symbol: 'BONK', name: 'Bonk Token' },
-  ];
-  
-  const tokens: TokenData[] = [];
-  const now = Date.now();
-  
-  for (let i = 0; i < 5; i++) {
-    const token = tokenNames[i];
-    const deployer = `CkwPTqR3${i}yGpMtx7LnP9vQz2K4Hd${i}NsFb8Wj6VmXc`;
-    const deployerStats = await calculateDeployerStats(deployer);
+async function analyzeTokens(): Promise<TokenData[]> {
+  try {
+    console.log('🚀 Starting token analysis...');
     
-    tokens.push({
-      rank: i + 1,
-      mint: `7xKXt${i}ZnP9Qm2yVw3Rd5Hc${i}8Lf4Gk6Bj1Ns9TvXm`,
-      name: token.name,
-      symbol: token.symbol,
-      uri: `https://pump.fun/coin/${token.symbol.toLowerCase()}`,
-      marketCap: 10000 + (i * 5000),
-      deployer: deployer,
-      holders: 100 - (i * 15),
-      createdAt: now - (i * 10 * 60 * 1000),
-      bondingRate: deployerStats.bondingRate,
-    });
+    const pumpFunPairs = await fetchRealPumpFunTokens();
+    
+    if (pumpFunPairs.length === 0) {
+      console.log('⚠️ No PumpFun tokens found');
+      return [];
+    }
+    
+    console.log('📊 Processing', pumpFunPairs.length, 'PumpFun tokens');
+    
+    // Convert to our format
+    const tokens = await Promise.all(pumpFunPairs.map(async (pair: any) => {
+      const deployer = pair.pairAddress || 'unknown';
+      const deployerStats = await calculateDeployerStats(deployer);
+      
+      // Calculate holders from transaction data
+      const txnBuys24h = pair.txns?.h24?.buys || 0;
+      const txnSells24h = pair.txns?.h24?.sells || 0;
+      const totalTxns = txnBuys24h + txnSells24h;
+      
+      // Estimate holders (roughly 1 holder per 3-5 transactions)
+      const estimatedHolders = Math.max(1, Math.floor(totalTxns / 4));
+      
+      const createdTimestamp = pair.pairCreatedAt 
+        ? new Date(pair.pairCreatedAt).getTime()
+        : Date.now();
+      
+      return {
+        mint: pair.baseToken?.address || 'unknown',
+        name: pair.baseToken?.name || 'Unknown Token',
+        symbol: pair.baseToken?.symbol || 'UNKNOWN',
+        uri: pair.url || 'https://pump.fun',
+        marketCap: pair.fdv || pair.liquidity?.usd || 0,
+        deployer: deployer,
+        holders: estimatedHolders,
+        createdAt: createdTimestamp,
+        bondingRate: deployerStats.bondingRate,
+      };
+    }));
+    
+    // Filter for recent tokens (last 24 hours)
+    const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
+    const recentTokens = tokens.filter(token => token.createdAt > twentyFourHoursAgo);
+    
+    console.log('✅ Found', recentTokens.length, 'tokens from last 24 hours');
+    
+    // If no recent tokens, use all available
+    const tokensToProcess = recentTokens.length > 0 ? recentTokens : tokens;
+    
+    return processTokens(tokensToProcess);
+    
+  } catch (error) {
+    console.error('❌ Error analyzing tokens:', error);
+    return [];
+  }
+}
+
+async function processTokens(tokens: any[]): Promise<TokenData[]> {
+  if (tokens.length === 0) {
+    console.log('⚠️ No tokens to process');
+    return [];
   }
   
-  console.log('✅ Generated 5 mock tokens');
-  return tokens;
+  console.log('✅ Processing', tokens.length, 'tokens');
+  
+  // Sort by holder count (highest first) and take top 5
+  const rankedTokens = tokens
+    .sort((a, b) => b.holders - a.holders)
+    .slice(0, 5)
+    .map((token, index) => ({
+      ...token,
+      rank: index + 1,
+    }));
+  
+  console.log('🏆 Top 5 PumpFun tokens by holders:');
+  rankedTokens.forEach(token => {
+    console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, $${token.marketCap?.toFixed(0) || 0} market cap`);
+  });
+  
+  return rankedTokens;
 }
 
 export async function GET(request: NextRequest) {
   try {
-    console.log('========================================');
     console.log('📡 API Route /api/tokens called');
-    console.log('========================================');
-    
     const now = Date.now();
     
-    // Test the API first
-    await testPumpFunAPI();
-    
-    // For now, use mock data
-    console.log('🔄 Using mock data...');
-    cachedTokens = await generateMockTokens();
-    lastFetchTime = now;
-    
-    console.log('💾 Returning', cachedTokens.length, 'tokens');
-    console.log('========================================');
+    // Use cache or fetch new data
+    if (now - lastFetchTime > CACHE_DURATION || cachedTokens.length === 0) {
+      console.log('🔄 Fetching fresh PumpFun data from DexScreener...');
+      cachedTokens = await analyzeTokens();
+      lastFetchTime = now;
+      console.log('💾 Cache updated with', cachedTokens.length, 'tokens');
+    } else {
+      console.log('✅ Using cached data (', cachedTokens.length, 'tokens)');
+    }
     
     return NextResponse.json({
       success: true,
       tokens: cachedTokens,
       lastUpdated: lastFetchTime,
       nextUpdate: lastFetchTime + CACHE_DURATION,
+      message: cachedTokens.length === 0 ? 'No PumpFun tokens found on DexScreener' : undefined,
     });
     
   } catch (error) {
