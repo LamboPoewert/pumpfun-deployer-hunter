@@ -98,9 +98,9 @@ export default function Home() {
         {/* Good Deployers Section */}
         <div className="mb-12">
           <h3 className="font-orbitron text-3xl font-bold text-center mb-8 tracking-wider">
-            <span className="text-white">GOOD</span>{' '}
+            <span className="text-white">TOP 5</span>{' '}
             <span className="text-transparent bg-clip-text bg-gradient-to-r from-cyan-400 to-purple-500">
-              DEPLOYERS
+              UNBONDED TOKENS
             </span>
           </h3>
 
@@ -149,10 +149,10 @@ export default function Home() {
                       </div>
                       <div className="text-right">
                         <div className="font-orbitron text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-green-400 to-cyan-400">
-                          {token.bondingRate.toFixed(1)}%
+                          {token.holders}
                         </div>
                         <div className="font-rajdhani text-sm text-gray-400">
-                          BONDING RATE
+                          HOLDERS
                         </div>
                       </div>
                     </div>
@@ -169,10 +169,10 @@ export default function Home() {
                       </div>
                       <div className="hologram rounded p-3">
                         <div className="font-rajdhani text-xs text-gray-400 mb-1">
-                          HOLDERS
+                          DEPLOYER BONDING
                         </div>
-                        <div className="font-orbitron text-lg font-bold text-pink-400">
-                          {token.holders}
+                        <div className="font-orbitron text-lg font-bold text-orange-400">
+                          {token.bondingRate.toFixed(1)}%
                         </div>
                       </div>
                       <div className="hologram rounded p-3 col-span-2 sm:col-span-1">
@@ -211,7 +211,7 @@ export default function Home() {
         <div className="text-center mt-12 font-rajdhani text-sm text-gray-500">
           <p>AUTO-REFRESHING EVERY 5 MINUTES</p>
           <p className="mt-2">
-            CRITERIA: 15+ HOLDERS • 6K+ MARKET CAP • 50%+ BONDING RATE • CREATED &lt;60 MIN
+            CRITERIA: 6K+ MARKET CAP • &lt;50% DEPLOYER BONDING RATE • CREATED &lt;60 MIN • RANKED BY HOLDERS
           </p>
         </div>
       </div>
