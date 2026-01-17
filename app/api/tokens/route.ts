@@ -1,89 +1,121 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { TokenData, DeployerStats } from '@/lib/types';
+import WebSocket from 'ws';
 
 // Force dynamic rendering
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-// Cache for storing token data and deployer stats
+// In-memory storage for tokens from WebSocket
+let realtimeTokens: any[] = [];
+let wsConnection: WebSocket | null = null;
+let lastWSConnect = 0;
+
+// Cache for API responses
 let cachedTokens: TokenData[] = [];
 let lastFetchTime = 0;
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
-// Using DexScreener API (NO API KEY NEEDED!)
-async function fetchRecentTokens(): Promise<any[]> {
+// Initialize WebSocket connection
+function initializeWebSocket() {
+  const now = Date.now();
+  
+  // Don't reconnect too frequently
+  if (wsConnection && wsConnection.readyState === WebSocket.OPEN) {
+    console.log('✅ WebSocket already connected');
+    return;
+  }
+  
+  if (now - lastWSConnect < 10000) {
+    console.log('⏳ Waiting before reconnecting WebSocket');
+    return;
+  }
+  
   try {
-    console.log('🔍 Fetching tokens from DexScreener...');
+    console.log('🔌 Connecting to PumpPortal WebSocket...');
+    lastWSConnect = now;
     
-    const response = await fetch(
-      'https://api.dexscreener.com/latest/dex/search?q=solana',
-      {
-        headers: {
-          'Accept': 'application/json',
-        },
-        cache: 'no-store',
+    wsConnection = new WebSocket('wss://pumpportal.fun/api/data');
+    
+    wsConnection.on('open', () => {
+      console.log('✅ WebSocket connected to PumpPortal');
+      
+      // Subscribe to token creation events
+      const subscribeMessage = {
+        method: "subscribeNewToken"
+      };
+      
+      wsConnection?.send(JSON.stringify(subscribeMessage));
+      console.log('📡 Subscribed to new token events');
+    });
+    
+    wsConnection.on('message', (data: WebSocket.Data) => {
+      try {
+        const message = JSON.parse(data.toString());
+        
+        // Handle new token creation
+        if (message.mint && message.name && message.symbol) {
+          console.log('🆕 New token:', message.symbol, '-', message.name);
+          
+          // Add to our realtime tokens list
+          const tokenData = {
+            mint: message.mint,
+            name: message.name,
+            symbol: message.symbol,
+            uri: message.uri || '',
+            marketCap: message.marketCap || 0,
+            deployer: message.traderPublicKey || message.creator || 'unknown',
+            holders: 1, // New token starts with 1 holder (creator)
+            createdAt: Date.now(),
+            priceUsd: message.initialBuy || 0,
+            volume24h: 0,
+            priceChange24h: 0,
+            bondingCurveKey: message.bondingCurveKey,
+            associatedBondingCurve: message.associatedBondingCurve,
+          };
+          
+          // Add to front of list
+          realtimeTokens.unshift(tokenData);
+          
+          // Keep only last 100 tokens
+          if (realtimeTokens.length > 100) {
+            realtimeTokens = realtimeTokens.slice(0, 100);
+          }
+          
+          console.log('💾 Stored token, total count:', realtimeTokens.length);
+        }
+        
+        // Handle trade updates
+        if (message.txType === 'buy' || message.txType === 'sell') {
+          // Update holder count for existing token
+          const existingToken = realtimeTokens.find(t => t.mint === message.mint);
+          if (existingToken) {
+            existingToken.holders = (existingToken.holders || 1) + 1;
+            existingToken.volume24h = (existingToken.volume24h || 0) + (message.solAmount || 0);
+          }
+        }
+        
+      } catch (error) {
+        console.error('❌ Error processing WebSocket message:', error);
       }
-    );
+    });
     
-    if (!response.ok) {
-      console.error('❌ DexScreener API error:', response.status);
-      return [];
-    }
+    wsConnection.on('error', (error) => {
+      console.error('❌ WebSocket error:', error);
+    });
     
-    const data = await response.json();
-    console.log('✅ Fetched', data.pairs?.length || 0, 'pairs from DexScreener');
-    
-    // Check all pairs first
-    const allPairs = data.pairs || [];
-    console.log('📊 Total pairs available:', allPairs.length);
-    
-    // Check how many have pairCreatedAt
-    const pairsWithCreation = allPairs.filter((p: any) => p.pairCreatedAt);
-    console.log('📊 Pairs with creation date:', pairsWithCreation.length);
-    
-    // Extend time window to 24 hours for debugging
-    const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
-    
-    const recentTokens = allPairs
-      .filter((pair: any) => {
-        if (!pair.pairCreatedAt) return false;
-        
-        const createdTime = new Date(pair.pairCreatedAt).getTime();
-        const isRecent = createdTime > twentyFourHoursAgo;
-        
-        return isRecent;
-      })
-      .slice(0, 100); // Get top 100 recent tokens
-    
-    console.log('✅ Found', recentTokens.length, 'tokens from last 24 hours');
-    
-    if (recentTokens.length > 0) {
-      const sample = recentTokens[0];
-      console.log('📝 Sample token:', {
-        symbol: sample.baseToken?.symbol,
-        created: sample.pairCreatedAt,
-        holders: (sample.txns?.h24?.buys || 0) + (sample.txns?.h24?.sells || 0),
-        marketCap: sample.liquidity?.usd,
-      });
-    }
-    
-    return recentTokens.map((pair: any) => ({
-      mint: pair.baseToken?.address || 'unknown',
-      name: pair.baseToken?.name || 'Unknown Token',
-      symbol: pair.baseToken?.symbol || 'UNKNOWN',
-      uri: pair.url || '',
-      marketCap: pair.liquidity?.usd || 0,
-      deployer: pair.pairAddress || 'unknown',
-      holders: (pair.txns?.h24?.buys || 0) + (pair.txns?.h24?.sells || 0),
-      createdAt: new Date(pair.pairCreatedAt).getTime(),
-      priceUsd: pair.priceUsd || 0,
-      volume24h: pair.volume?.h24 || 0,
-      priceChange24h: pair.priceChange?.h24 || 0,
-    }));
+    wsConnection.on('close', () => {
+      console.log('🔌 WebSocket disconnected');
+      wsConnection = null;
+      
+      // Reconnect after 10 seconds
+      setTimeout(() => {
+        initializeWebSocket();
+      }, 10000);
+    });
     
   } catch (error) {
-    console.error('❌ Error fetching tokens:', error);
-    return [];
+    console.error('❌ Error initializing WebSocket:', error);
   }
 }
 
@@ -104,50 +136,26 @@ async function calculateDeployerStats(deployer: string): Promise<DeployerStats> 
 async function analyzeTokens(): Promise<TokenData[]> {
   try {
     console.log('🚀 Starting token analysis...');
+    console.log('📊 Realtime tokens available:', realtimeTokens.length);
     
-    const recentTokens = await fetchRecentTokens();
-    
-    console.log('📊 Received', recentTokens.length, 'recent tokens');
-    
-    if (recentTokens.length === 0) {
-      console.log('⚠️ No recent tokens found');
+    if (realtimeTokens.length === 0) {
+      console.log('⚠️ No realtime tokens yet, WebSocket may still be connecting');
       return [];
     }
     
-    // Log market cap distribution
-    const marketCaps = recentTokens.map(t => t.marketCap).sort((a, b) => b - a);
-    console.log('💰 Market cap range:', {
-      highest: marketCaps[0],
-      median: marketCaps[Math.floor(marketCaps.length / 2)],
-      lowest: marketCaps[marketCaps.length - 1],
-    });
+    // Filter for tokens from last 60 minutes
+    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    const recentTokens = realtimeTokens.filter(token => token.createdAt > oneHourAgo);
     
-    // Lower market cap requirement to $1000 for debugging
-    const filteredTokens = recentTokens.filter(token => {
-      const meetsMarketCapRequirement = token.marketCap >= 1000;
-      return meetsMarketCapRequirement;
-    });
+    console.log('✅ Found', recentTokens.length, 'tokens from last 60 minutes');
     
-    console.log('✅ Filtered to', filteredTokens.length, 'tokens with 1K+ market cap');
-    
-    if (filteredTokens.length === 0) {
-      console.log('⚠️ No tokens meet the 1K market cap criteria');
-      // Return top 5 by holders anyway for debugging
-      const allSorted = recentTokens
-        .sort((a, b) => b.holders - a.holders)
-        .slice(0, 5);
-      
-      console.log('🔍 Returning top 5 anyway for debugging:', allSorted.map(t => ({
-        symbol: t.symbol,
-        holders: t.holders,
-        marketCap: t.marketCap,
-      })));
-      
-      // Still process them
-      return await processTokens(allSorted);
+    if (recentTokens.length === 0) {
+      console.log('⚠️ No tokens from last 60 minutes');
+      // Use all available tokens if none in last hour
+      return await processTokens(realtimeTokens.slice(0, 10));
     }
     
-    return await processTokens(filteredTokens);
+    return await processTokens(recentTokens);
     
   } catch (error) {
     console.error('❌ Error analyzing tokens:', error);
@@ -156,11 +164,13 @@ async function analyzeTokens(): Promise<TokenData[]> {
 }
 
 async function processTokens(tokens: any[]): Promise<TokenData[]> {
+  if (tokens.length === 0) return [];
+  
   // Get unique deployers
   const deployers = [...new Set(tokens.map(t => t.deployer))];
   console.log('📊 Found', deployers.length, 'unique deployers');
   
-  // Calculate deployer stats for display purposes
+  // Calculate deployer stats
   const deployerStatsMap = new Map<string, DeployerStats>();
   
   for (const deployer of deployers) {
@@ -179,14 +189,6 @@ async function processTokens(tokens: any[]): Promise<TokenData[]> {
   
   console.log('✅ Processing', tokensWithStats.length, 'tokens');
   
-  // Log holder distribution
-  const holderCounts = tokensWithStats.map(t => t.holders).sort((a, b) => b - a);
-  console.log('👥 Holder distribution:', {
-    highest: holderCounts[0],
-    median: holderCounts[Math.floor(holderCounts.length / 2)],
-    lowest: holderCounts[holderCounts.length - 1],
-  });
-  
   // Sort by holder count (highest first) and take top 5
   const rankedTokens = tokensWithStats
     .sort((a, b) => b.holders - a.holders)
@@ -198,20 +200,28 @@ async function processTokens(tokens: any[]): Promise<TokenData[]> {
   
   console.log('🏆 Returning top 5 tokens with most holders:');
   rankedTokens.forEach(token => {
-    console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, $${token.marketCap.toFixed(0)} market cap, ${token.bondingRate.toFixed(1)}% bonding`);
+    console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, ${token.bondingRate.toFixed(1)}% bonding`);
   });
   
   return rankedTokens;
 }
+
+// Initialize WebSocket on module load
+initializeWebSocket();
 
 export async function GET(request: NextRequest) {
   try {
     console.log('📡 API Route called');
     const now = Date.now();
     
-    // Handle regular token request only
+    // Ensure WebSocket is connected
+    if (!wsConnection || wsConnection.readyState !== WebSocket.OPEN) {
+      initializeWebSocket();
+    }
+    
+    // Handle regular token request
     if (now - lastFetchTime > CACHE_DURATION || cachedTokens.length === 0) {
-      console.log('🔄 Cache expired or empty, fetching new data...');
+      console.log('🔄 Analyzing tokens...');
       cachedTokens = await analyzeTokens();
       lastFetchTime = now;
       console.log('💾 Cache updated with', cachedTokens.length, 'tokens');
@@ -224,7 +234,8 @@ export async function GET(request: NextRequest) {
       tokens: cachedTokens,
       lastUpdated: lastFetchTime,
       nextUpdate: lastFetchTime + CACHE_DURATION,
-      message: cachedTokens.length === 0 ? 'No tokens found matching criteria' : undefined,
+      totalRealtimeTokens: realtimeTokens.length,
+      message: cachedTokens.length === 0 ? 'Waiting for token data from WebSocket...' : undefined,
     });
     
   } catch (error) {
