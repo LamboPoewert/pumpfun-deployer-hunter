@@ -45,12 +45,10 @@ async function fetchRealPumpFunTokens(): Promise<any[]> {
     console.log('✅ Found', pumpFunPairs.length, 'PumpFun tokens');
     
     if (pumpFunPairs.length > 0) {
-      console.log('📝 Sample token:', {
-        symbol: pumpFunPairs[0].baseToken?.symbol,
-        name: pumpFunPairs[0].baseToken?.name,
-        url: pumpFunPairs[0].url,
-        created: pumpFunPairs[0].pairCreatedAt,
-      });
+      const sample = pumpFunPairs[0];
+      console.log('📝 Sample token full data:', JSON.stringify(sample, null, 2));
+      console.log('📝 Available fields:', Object.keys(sample));
+      console.log('📝 baseToken fields:', sample.baseToken ? Object.keys(sample.baseToken) : 'none');
     }
     
     return pumpFunPairs;
