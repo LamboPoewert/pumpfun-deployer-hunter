@@ -6,7 +6,7 @@ export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
 // Your Railway backend URL
-const BACKEND_URL = process.env.BACKEND_URL || 'https://your-backend.railway.app';
+const BACKEND_URL = process.env.BACKEND_URL || 'https://pumpfun-backend-production-b249.up.railway.app';
 
 // Cache for storing token data
 let cachedTokens: TokenData[] = [];
