@@ -90,7 +90,12 @@ async function analyzeTokens(): Promise<TokenData[]> {
     
     // Convert to our format
     const tokens = await Promise.all(pumpFunPairs.map(async (pair: any) => {
-      const deployer = pair.pairAddress || 'unknown';
+      // Use the actual creator/deployer address, not the pair address
+      const deployer = pair.baseToken?.creator || 
+                      pair.creator || 
+                      pair.pairCreator ||
+                      'unknown';
+      
       const deployerStats = await calculateDeployerStats(deployer);
       
       // Calculate holders from transaction data
@@ -104,6 +109,8 @@ async function analyzeTokens(): Promise<TokenData[]> {
       const createdTimestamp = pair.pairCreatedAt 
         ? new Date(pair.pairCreatedAt).getTime()
         : Date.now();
+      
+      console.log('Token:', pair.baseToken?.symbol, 'Creator:', deployer.substring(0, 8) + '...');
       
       return {
         mint: pair.baseToken?.address || 'unknown',
