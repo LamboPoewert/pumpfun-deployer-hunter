@@ -33,21 +33,39 @@ async function fetchRecentTokens(): Promise<any[]> {
     const data = await response.json();
     console.log('✅ Fetched', data.pairs?.length || 0, 'pairs from DexScreener');
     
-    // Filter for recent PumpFun-like tokens
-    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+    // Check all pairs first
+    const allPairs = data.pairs || [];
+    console.log('📊 Total pairs available:', allPairs.length);
     
-    const recentTokens = (data.pairs || [])
+    // Check how many have pairCreatedAt
+    const pairsWithCreation = allPairs.filter((p: any) => p.pairCreatedAt);
+    console.log('📊 Pairs with creation date:', pairsWithCreation.length);
+    
+    // Extend time window to 24 hours for debugging
+    const twentyFourHoursAgo = Date.now() - (24 * 60 * 60 * 1000);
+    
+    const recentTokens = allPairs
       .filter((pair: any) => {
         if (!pair.pairCreatedAt) return false;
         
         const createdTime = new Date(pair.pairCreatedAt).getTime();
-        const isRecent = createdTime > oneHourAgo;
+        const isRecent = createdTime > twentyFourHoursAgo;
         
         return isRecent;
       })
-      .slice(0, 50);
+      .slice(0, 100); // Get top 100 recent tokens
     
-    console.log('✅ Found', recentTokens.length, 'recent tokens');
+    console.log('✅ Found', recentTokens.length, 'tokens from last 24 hours');
+    
+    if (recentTokens.length > 0) {
+      const sample = recentTokens[0];
+      console.log('📝 Sample token:', {
+        symbol: sample.baseToken?.symbol,
+        created: sample.pairCreatedAt,
+        holders: (sample.txns?.h24?.buys || 0) + (sample.txns?.h24?.sells || 0),
+        marketCap: sample.liquidity?.usd,
+      });
+    }
     
     return recentTokens.map((pair: any) => ({
       mint: pair.baseToken?.address || 'unknown',
@@ -89,67 +107,101 @@ async function analyzeTokens(): Promise<TokenData[]> {
     
     const recentTokens = await fetchRecentTokens();
     
+    console.log('📊 Received', recentTokens.length, 'recent tokens');
+    
     if (recentTokens.length === 0) {
       console.log('⚠️ No recent tokens found');
       return [];
     }
     
-    // Filter for tokens created in last 60 minutes with minimum market cap
+    // Log market cap distribution
+    const marketCaps = recentTokens.map(t => t.marketCap).sort((a, b) => b - a);
+    console.log('💰 Market cap range:', {
+      highest: marketCaps[0],
+      median: marketCaps[Math.floor(marketCaps.length / 2)],
+      lowest: marketCaps[marketCaps.length - 1],
+    });
+    
+    // Lower market cap requirement to $1000 for debugging
     const filteredTokens = recentTokens.filter(token => {
-      const meetsMarketCapRequirement = token.marketCap >= 6000;
+      const meetsMarketCapRequirement = token.marketCap >= 1000;
       return meetsMarketCapRequirement;
     });
     
-    console.log('✅ Filtered to', filteredTokens.length, 'tokens with 6K+ market cap');
+    console.log('✅ Filtered to', filteredTokens.length, 'tokens with 1K+ market cap');
     
     if (filteredTokens.length === 0) {
-      console.log('⚠️ No tokens meet the criteria');
-      return [];
+      console.log('⚠️ No tokens meet the 1K market cap criteria');
+      // Return top 5 by holders anyway for debugging
+      const allSorted = recentTokens
+        .sort((a, b) => b.holders - a.holders)
+        .slice(0, 5);
+      
+      console.log('🔍 Returning top 5 anyway for debugging:', allSorted.map(t => ({
+        symbol: t.symbol,
+        holders: t.holders,
+        marketCap: t.marketCap,
+      })));
+      
+      // Still process them
+      return await processTokens(allSorted);
     }
     
-    // Get unique deployers
-    const deployers = [...new Set(filteredTokens.map(t => t.deployer))];
-    console.log('📊 Found', deployers.length, 'unique deployers');
-    
-    // Calculate deployer stats for display purposes
-    const deployerStatsMap = new Map<string, DeployerStats>();
-    
-    for (const deployer of deployers) {
-      const stats = await calculateDeployerStats(deployer);
-      deployerStatsMap.set(deployer, stats);
-    }
-    
-    // Map all tokens with deployer stats (no bonding rate filter)
-    const tokensWithStats = filteredTokens.map(token => {
-      const deployerStats = deployerStatsMap.get(token.deployer);
-      return {
-        ...token,
-        bondingRate: deployerStats?.bondingRate || 0,
-      } as TokenData;
-    });
-    
-    console.log('✅ Processing', tokensWithStats.length, 'tokens (no bonding rate filter)');
-    
-    // Sort by holder count (highest first) and take top 5
-    const rankedTokens = tokensWithStats
-      .sort((a, b) => b.holders - a.holders)
-      .slice(0, 5)
-      .map((token, index) => ({
-        ...token,
-        rank: index + 1,
-      }));
-    
-    console.log('🏆 Returning top 5 tokens with most holders');
-    rankedTokens.forEach(token => {
-      console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, ${token.bondingRate.toFixed(1)}% deployer bonding rate`);
-    });
-    
-    return rankedTokens;
+    return await processTokens(filteredTokens);
     
   } catch (error) {
     console.error('❌ Error analyzing tokens:', error);
     return [];
   }
+}
+
+async function processTokens(tokens: any[]): Promise<TokenData[]> {
+  // Get unique deployers
+  const deployers = [...new Set(tokens.map(t => t.deployer))];
+  console.log('📊 Found', deployers.length, 'unique deployers');
+  
+  // Calculate deployer stats for display purposes
+  const deployerStatsMap = new Map<string, DeployerStats>();
+  
+  for (const deployer of deployers) {
+    const stats = await calculateDeployerStats(deployer);
+    deployerStatsMap.set(deployer, stats);
+  }
+  
+  // Map all tokens with deployer stats
+  const tokensWithStats = tokens.map(token => {
+    const deployerStats = deployerStatsMap.get(token.deployer);
+    return {
+      ...token,
+      bondingRate: deployerStats?.bondingRate || 0,
+    } as TokenData;
+  });
+  
+  console.log('✅ Processing', tokensWithStats.length, 'tokens');
+  
+  // Log holder distribution
+  const holderCounts = tokensWithStats.map(t => t.holders).sort((a, b) => b - a);
+  console.log('👥 Holder distribution:', {
+    highest: holderCounts[0],
+    median: holderCounts[Math.floor(holderCounts.length / 2)],
+    lowest: holderCounts[holderCounts.length - 1],
+  });
+  
+  // Sort by holder count (highest first) and take top 5
+  const rankedTokens = tokensWithStats
+    .sort((a, b) => b.holders - a.holders)
+    .slice(0, 5)
+    .map((token, index) => ({
+      ...token,
+      rank: index + 1,
+    }));
+  
+  console.log('🏆 Returning top 5 tokens with most holders:');
+  rankedTokens.forEach(token => {
+    console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, $${token.marketCap.toFixed(0)} market cap, ${token.bondingRate.toFixed(1)}% bonding`);
+  });
+  
+  return rankedTokens;
 }
 
 export async function GET(request: NextRequest) {
