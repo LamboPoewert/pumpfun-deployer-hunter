@@ -5,163 +5,114 @@ import { TokenData, DeployerStats } from '@/lib/types';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
+// Your Railway backend URL
+const BACKEND_URL = process.env.BACKEND_URL || 'https://your-backend.railway.app';
+
 // Cache for storing token data
 let cachedTokens: TokenData[] = [];
 let lastFetchTime = 0;
-const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
+const CACHE_DURATION = 30 * 1000; // 30 seconds (refresh more often since backend is real-time)
 
-async function fetchPumpFunTokens(): Promise<any[]> {
-  try {
-    console.log('🔍 Fetching PumpFun tokens from DexScreener...');
-    
-    const response = await fetch(
-      'https://api.dexscreener.com/latest/dex/search/?q=pump.fun',
-      {
-        headers: {
-          'Accept': 'application/json',
-        },
-        cache: 'no-store',
-      }
-    );
-    
-    if (!response.ok) {
-      console.error('❌ DexScreener API error:', response.status);
-      return [];
-    }
-    
-    const data = await response.json();
-    const pairs = data.pairs || [];
-    
-    console.log('✅ Fetched', pairs.length, 'pairs from DexScreener');
-    
-    // Filter for PumpFun tokens only
-    const pumpFunPairs = pairs.filter((pair: any) => {
-      return pair.dexId === 'pumpfun' || pair.url?.includes('pump.fun');
-    });
-    
-    console.log('✅ Found', pumpFunPairs.length, 'PumpFun tokens');
-    
-    return pumpFunPairs;
-    
-  } catch (error) {
-    console.error('❌ Error fetching from DexScreener:', error);
-    return [];
-  }
-}
-
-async function calculateDeployerStats(address: string): Promise<DeployerStats> {
-  const hash = address.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+async function calculateDeployerStats(creator: string): Promise<DeployerStats> {
+  const hash = creator.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
   const totalTokens = 5 + (hash % 15);
   const bondingRate = 50 + (hash % 40);
   const bondedTokens = Math.floor(totalTokens * (bondingRate / 100));
   
   return {
-    address: address,
+    address: creator,
     totalTokens,
     bondedTokens,
     bondingRate,
   };
 }
 
-async function analyzeTokens(): Promise<TokenData[]> {
+async function fetchFromBackend(): Promise<TokenData[]> {
   try {
-    console.log('🚀 Starting token analysis...');
+    console.log('🔍 Fetching tokens from backend...');
     
-    const pumpFunPairs = await fetchPumpFunTokens();
+    // Call your Railway backend
+    const response = await fetch(`${BACKEND_URL}/api/tokens?limit=100`, {
+      headers: {
+        'Accept': 'application/json',
+      },
+      cache: 'no-store',
+    });
     
-    if (pumpFunPairs.length === 0) {
-      console.log('⚠️ No PumpFun tokens found');
+    if (!response.ok) {
+      console.error('❌ Backend API error:', response.status);
       return [];
     }
     
-    console.log('📊 Processing', pumpFunPairs.length, 'PumpFun tokens');
+    const data = await response.json();
+    console.log('✅ Received', data.count, 'tokens from backend');
     
-    // Convert to our format
-    const tokens = await Promise.all(pumpFunPairs.map(async (pair: any) => {
-      const tokenMint = pair.baseToken?.address || 'unknown';
-      const marketCap = pair.fdv || pair.marketCap || pair.liquidity?.usd || 0;
-      
-      // Estimate holders from transaction data
-      const txnBuys24h = pair.txns?.h24?.buys || 0;
-      const txnSells24h = pair.txns?.h24?.sells || 0;
-      const totalTxns = txnBuys24h + txnSells24h;
-      
-      // Estimate holders (1 holder per ~3-4 transactions)
-      const estimatedHolders = Math.max(1, Math.floor(totalTxns / 3.5));
-      
-      const deployerStats = await calculateDeployerStats(tokenMint);
-      
-      const createdTimestamp = pair.pairCreatedAt || Date.now();
+    const backendTokens = data.tokens || [];
+    
+    // Convert to our format and add deployer stats
+    const tokens = await Promise.all(backendTokens.map(async (token: any) => {
+      const creator = token.creator || 'unknown';
+      const deployerStats = await calculateDeployerStats(creator);
       
       return {
-        mint: tokenMint,
-        name: pair.baseToken?.name || 'Unknown Token',
-        symbol: pair.baseToken?.symbol || 'UNKNOWN',
-        uri: pair.url || 'https://pump.fun',
-        marketCap: marketCap,
-        deployer: tokenMint,
-        holders: estimatedHolders,
-        createdAt: createdTimestamp,
+        mint: token.mint,
+        name: token.name,
+        symbol: token.symbol,
+        uri: `https://pump.fun/${token.mint}`,
+        marketCap: token.marketCap || 0,
+        deployer: creator,
+        holders: 1, // Backend doesn't track holders yet
+        createdAt: token.createdAt,
         bondingRate: deployerStats.bondingRate,
       };
     }));
     
-    console.log('✅ Converted', tokens.length, 'tokens to our format');
+    console.log('✅ Converted to our format:', tokens.length);
     
-    // Apply filters: 160+ holders AND 15K+ market cap
+    // Filter by your requirements
     const filteredTokens = tokens.filter(token => {
-      const meetsHolderRequirement = token.holders >= 160;
-      const meetsMarketCapRequirement = token.marketCap >= 15000;
-      
-      if (meetsHolderRequirement && meetsMarketCapRequirement) {
-        console.log(`  ✅ ${token.symbol}: ${token.holders} holders, $${token.marketCap.toFixed(0)} market cap`);
-      }
-      
-      return meetsHolderRequirement && meetsMarketCapRequirement;
+      const meetsMarketCap = token.marketCap >= 15000;
+      // You can add more filters here
+      return meetsMarketCap;
     });
     
-    console.log('✅ Filtered to', filteredTokens.length, 'tokens meeting criteria (160+ holders, 15K+ market cap)');
+    console.log('✅ Filtered to', filteredTokens.length, 'tokens (15K+ market cap)');
     
-    if (filteredTokens.length === 0) {
-      console.log('⚠️ No tokens meet the criteria');
-      return [];
-    }
-    
-    // Sort by holders (highest first) and take top 5
+    // Sort by market cap and take top 5
     const rankedTokens = filteredTokens
-      .sort((a, b) => b.holders - a.holders)
+      .sort((a, b) => b.marketCap - a.marketCap)
       .slice(0, 5)
       .map((token, index) => ({
         ...token,
         rank: index + 1,
       }));
     
-    console.log('🏆 Top 5 unbonded tokens:');
+    console.log('🏆 Top 5 tokens:');
     rankedTokens.forEach(token => {
-      console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} holders, $${token.marketCap.toFixed(0)} market cap`);
+      console.log(`  #${token.rank}: ${token.symbol} - $${token.marketCap.toFixed(0)} market cap`);
     });
     
     return rankedTokens;
     
   } catch (error) {
-    console.error('❌ Error analyzing tokens:', error);
+    console.error('❌ Error fetching from backend:', error);
     return [];
   }
 }
 
 export async function GET(request: NextRequest) {
   try {
-    console.log('📡 API Route /api/tokens called');
+    console.log('📡 API Route called');
     const now = Date.now();
     
-    // Use cache or fetch new data
+    // Refresh cache every 30 seconds
     if (now - lastFetchTime > CACHE_DURATION || cachedTokens.length === 0) {
-      console.log('🔄 Fetching fresh PumpFun data...');
-      cachedTokens = await analyzeTokens();
+      console.log('🔄 Fetching fresh data from backend...');
+      cachedTokens = await fetchFromBackend();
       lastFetchTime = now;
       console.log('💾 Cache updated with', cachedTokens.length, 'tokens');
     } else {
-      console.log('✅ Using cached data (', cachedTokens.length, 'tokens)');
+      console.log('✅ Using cached data');
     }
     
     return NextResponse.json({
@@ -169,7 +120,7 @@ export async function GET(request: NextRequest) {
       tokens: cachedTokens,
       lastUpdated: lastFetchTime,
       nextUpdate: lastFetchTime + CACHE_DURATION,
-      message: cachedTokens.length === 0 ? 'No tokens found meeting criteria (160+ holders, 15K+ market cap)' : undefined,
+      message: cachedTokens.length === 0 ? 'No tokens available from backend' : undefined,
     });
     
   } catch (error) {
@@ -179,7 +130,6 @@ export async function GET(request: NextRequest) {
       { 
         success: false, 
         error: 'Failed to fetch tokens',
-        message: error instanceof Error ? error.message : 'Unknown error',
         tokens: [],
       },
       { status: 500 }
