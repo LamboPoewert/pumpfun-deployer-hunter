@@ -197,13 +197,13 @@ export default function Home() {
                       </div>
                     </div>
 
-                    {/* Token Address Info */}
+                    {/* Dev Wallet Info */}
                     <div className="mt-4 pt-4 border-t border-cyan-900">
                       <div className="font-rajdhani text-xs text-gray-400 mb-1">
-                        TOKEN ADDRESS
+                        DEV WALLET
                       </div>
                       <div className="font-mono text-sm text-gray-300 break-all">
-                        {token.mint}
+                        {token.deployer}
                       </div>
                     </div>
                   </div>
