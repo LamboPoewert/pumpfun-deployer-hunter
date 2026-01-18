@@ -181,10 +181,10 @@ export default function Home() {
                       </div>
                       <div className="hologram rounded p-3">
                         <div className="font-rajdhani text-xs text-gray-400 mb-1">
-                          DEPLOYER BONDING
+                          RANK
                         </div>
-                        <div className="font-orbitron text-lg font-bold text-orange-400">
-                          {token.bondingRate.toFixed(1)}%
+                        <div className="font-orbitron text-lg font-bold text-pink-400">
+                          #{token.rank}
                         </div>
                       </div>
                       <div className="hologram rounded p-3 col-span-2 sm:col-span-1">
