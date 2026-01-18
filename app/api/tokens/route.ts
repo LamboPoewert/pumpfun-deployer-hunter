@@ -11,7 +11,7 @@ const BACKEND_URL = process.env.BACKEND_URL || 'https://your-backend.railway.app
 // Cache for storing token data
 let cachedTokens: TokenData[] = [];
 let lastFetchTime = 0;
-const CACHE_DURATION = 30 * 1000; // 30 seconds
+const CACHE_DURATION = 60 * 1000; // 1 minute
 
 async function calculateDeployerStats(creator: string): Promise<DeployerStats> {
   const hash = creator.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
@@ -191,7 +191,7 @@ export async function GET(request: NextRequest) {
     console.log('📡 API Route called');
     const now = Date.now();
     
-    // Refresh cache every 30 seconds
+    // Refresh cache every 1 minute
     if (now - lastFetchTime > CACHE_DURATION || cachedTokens.length === 0) {
       console.log('🔄 Fetching fresh data from backend and enriching with DexScreener...');
       cachedTokens = await fetchFromBackend();
