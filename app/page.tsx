@@ -31,10 +31,10 @@ export default function Home() {
   useEffect(() => {
     fetchTokens();
     
-    // Refresh every 5 minutes
+    // Refresh every 1 minute
     const interval = setInterval(() => {
       fetchTokens();
-    }, 5 * 60 * 1000);
+    }, 60 * 1000); // 1 minute
     
     return () => clearInterval(interval);
   }, []);
@@ -221,7 +221,7 @@ export default function Home() {
 
         {/* Footer */}
         <div className="text-center mt-12 font-rajdhani text-sm text-gray-500">
-          <p>AUTO-REFRESHING EVERY 5 MINUTES</p>
+          <p>AUTO-REFRESHING EVERY 1 MINUTE</p>
           <p className="mt-2">
             CRITERIA: 160+ HOLDERS • $15K+ MARKET CAP • RANKED BY HOLDERS
           </p>
