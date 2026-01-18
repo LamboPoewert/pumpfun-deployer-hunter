@@ -29,7 +29,6 @@ async function calculateDeployerStats(creator: string): Promise<DeployerStats> {
 
 async function fetchMarketCapFromDexScreener(tokenMint: string): Promise<number> {
   try {
-    // Search DexScreener for this specific token
     const response = await fetch(
       `https://api.dexscreener.com/latest/dex/tokens/${tokenMint}`,
       {
@@ -51,13 +50,76 @@ async function fetchMarketCapFromDexScreener(tokenMint: string): Promise<number>
       return 0;
     }
     
-    // Get the first pair's market cap
     const marketCap = pairs[0].fdv || pairs[0].marketCap || pairs[0].liquidity?.usd || 0;
-    
     return marketCap;
     
   } catch (error) {
     console.error(`Error fetching market cap for ${tokenMint}:`, error);
+    return 0;
+  }
+}
+
+async function fetchRealHolderCount(tokenMint: string): Promise<number> {
+  try {
+    console.log(`    Fetching holder count for ${tokenMint.substring(0, 8)}...`);
+    
+    // Use free Solana RPC to get token accounts
+    const response = await fetch('https://api.mainnet-beta.solana.com', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getProgramAccounts',
+        params: [
+          'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA', // Token Program ID
+          {
+            encoding: 'jsonParsed',
+            filters: [
+              {
+                dataSize: 165, // Size of token account
+              },
+              {
+                memcmp: {
+                  offset: 0, // Mint address starts at offset 0
+                  bytes: tokenMint, // Filter by this token mint
+                },
+              },
+            ],
+          },
+        ],
+      }),
+    });
+    
+    if (!response.ok) {
+      console.log(`    RPC error: ${response.status}`);
+      return 0;
+    }
+    
+    const data = await response.json();
+    
+    if (data.error) {
+      console.log(`    RPC error: ${data.error.message}`);
+      return 0;
+    }
+    
+    const accounts = data.result || [];
+    
+    // Filter for accounts with non-zero balance
+    const holdersWithBalance = accounts.filter((account: any) => {
+      const amount = account?.account?.data?.parsed?.info?.tokenAmount?.uiAmount || 0;
+      return amount > 0;
+    });
+    
+    const holderCount = holdersWithBalance.length;
+    console.log(`    Real holder count: ${holderCount}`);
+    
+    return holderCount;
+    
+  } catch (error) {
+    console.error(`Error fetching holder count for ${tokenMint}:`, error);
     return 0;
   }
 }
@@ -67,7 +129,6 @@ async function fetchFromBackend(): Promise<TokenData[]> {
     console.log('🔍 Fetching tokens from Railway backend...');
     console.log('🔗 Backend URL:', BACKEND_URL);
     
-    // Call Railway backend
     const response = await fetch(`${BACKEND_URL}/api/tokens?limit=50`, {
       headers: {
         'Accept': 'application/json',
@@ -93,21 +154,23 @@ async function fetchFromBackend(): Promise<TokenData[]> {
       return [];
     }
     
-    console.log('📊 Enriching tokens with DexScreener market cap data...');
+    console.log('📊 Enriching tokens with market cap and REAL holder counts...');
+    console.log('⚠️ This may take 30-60 seconds for Solana RPC calls...');
     
-    // Enrich tokens with market cap from DexScreener
-    // Process in batches to avoid rate limits
     const enrichedTokens = [];
     
-    for (let i = 0; i < Math.min(backendTokens.length, 20); i++) {
+    // Process fewer tokens due to RPC call time (10 tokens max)
+    for (let i = 0; i < Math.min(backendTokens.length, 10); i++) {
       const token = backendTokens[i];
       
-      console.log(`  Fetching market cap for ${token.symbol} (${i + 1}/20)...`);
+      console.log(`  Processing ${token.symbol} (${i + 1}/10)...`);
       
-      // Fetch market cap from DexScreener
+      // Fetch market cap from DexScreener (fast)
       const marketCap = await fetchMarketCapFromDexScreener(token.mint);
+      console.log(`    Market cap: $${marketCap.toFixed(0)}`);
       
-      console.log(`    ${token.symbol}: $${marketCap.toFixed(0)} market cap`);
+      // Fetch REAL holder count from Solana RPC (slow but accurate)
+      const holders = await fetchRealHolderCount(token.mint);
       
       const creator = token.creator || 'unknown';
       const deployerStats = await calculateDeployerStats(creator);
@@ -117,64 +180,69 @@ async function fetchFromBackend(): Promise<TokenData[]> {
         name: token.name,
         symbol: token.symbol,
         uri: `https://pump.fun/${token.mint}`,
-        marketCap: marketCap, // Real market cap from DexScreener!
+        marketCap: marketCap,
         deployer: creator,
-        holders: 1,
+        holders: holders, // REAL holder count from Solana!
         createdAt: token.createdAt,
         bondingRate: deployerStats.bondingRate,
       });
       
-      // Small delay to avoid rate limiting
-      await new Promise(resolve => setTimeout(resolve, 100));
+      // Small delay between RPC calls
+      await new Promise(resolve => setTimeout(resolve, 200));
     }
     
-    console.log('✅ Enriched', enrichedTokens.length, 'tokens with market cap data');
+    console.log('✅ Enriched', enrichedTokens.length, 'tokens with REAL holder counts');
     
-    // Filter by market cap requirement
+    // Filter by requirements
     const MIN_MARKET_CAP = 15000;
+    const MIN_HOLDERS = 160;
     
     const filteredTokens = enrichedTokens.filter(token => {
       const meetsMarketCap = token.marketCap >= MIN_MARKET_CAP;
-      if (meetsMarketCap) {
-        console.log(`  ✅ ${token.symbol}: $${token.marketCap.toFixed(0)} (meets 15K requirement)`);
+      const meetsHolders = token.holders >= MIN_HOLDERS;
+      
+      if (meetsMarketCap && meetsHolders) {
+        console.log(`  ✅ ${token.symbol}: ${token.holders} holders, $${token.marketCap.toFixed(0)} (PASSES)`);
+      } else {
+        console.log(`  ❌ ${token.symbol}: ${token.holders} holders, $${token.marketCap.toFixed(0)} (filtered out)`);
       }
-      return meetsMarketCap;
+      
+      return meetsMarketCap && meetsHolders;
     });
     
-    console.log('✅ Filtered to', filteredTokens.length, 'tokens with 15K+ market cap');
+    console.log('✅ Filtered to', filteredTokens.length, 'tokens (15K+ market cap, 160+ holders)');
     
     if (filteredTokens.length === 0) {
-      console.log('⚠️ No tokens meet 15K market cap, showing top 5 by market cap anyway');
+      console.log('⚠️ No tokens meet both criteria, showing top 5 by holders');
       
-      // Return top 5 by market cap regardless
       const rankedTokens = enrichedTokens
-        .sort((a, b) => b.marketCap - a.marketCap)
+        .sort((a, b) => b.holders - a.holders)
         .slice(0, 5)
         .map((token, index) => ({
           ...token,
           rank: index + 1,
         }));
       
-      console.log('🏆 Top 5 tokens by market cap:');
+      console.log('🏆 Top 5 tokens by holder count:');
       rankedTokens.forEach(token => {
-        console.log(`  #${token.rank}: ${token.symbol} - $${token.marketCap.toFixed(0)}`);
+        console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} REAL holders`);
       });
       
       return rankedTokens;
     }
     
-    // Sort by market cap (highest first) and take top 5
+    // Sort by holder count (highest first) and take top 5
     const rankedTokens = filteredTokens
-      .sort((a, b) => b.marketCap - a.marketCap)
+      .sort((a, b) => b.holders - a.holders)
       .slice(0, 5)
       .map((token, index) => ({
         ...token,
         rank: index + 1,
       }));
     
-    console.log('🏆 Top 5 tokens with 15K+ market cap:');
+    console.log('🏆 Top 5 tokens:');
     rankedTokens.forEach(token => {
-      console.log(`  #${token.rank}: ${token.symbol} - $${token.marketCap.toFixed(0)} market cap`);
+      console.log(`  #${token.rank}: ${token.symbol} - ${token.holders} REAL holders, $${token.marketCap.toFixed(0)}`);
     });
     
     return rankedTokens;
@@ -193,10 +261,15 @@ export async function GET(request: NextRequest) {
     
     // Refresh cache every 1 minute
     if (now - lastFetchTime > CACHE_DURATION || cachedTokens.length === 0) {
-      console.log('🔄 Fetching fresh data from backend and enriching with DexScreener...');
+      console.log('🔄 Fetching fresh data (this will take 30-60 seconds for RPC calls)...');
+      const startTime = Date.now();
+      
       cachedTokens = await fetchFromBackend();
+      
+      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      console.log(`💾 Cache updated with ${cachedTokens.length} tokens (took ${elapsed}s)`);
+      
       lastFetchTime = now;
-      console.log('💾 Cache updated with', cachedTokens.length, 'tokens');
     } else {
       console.log('✅ Using cached data (', cachedTokens.length, 'tokens)');
     }
